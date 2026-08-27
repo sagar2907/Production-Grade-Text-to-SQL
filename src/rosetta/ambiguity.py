@@ -39,6 +39,52 @@ class Outcome(str, Enum):
     UNANSWERABLE = "unanswerable"
 
 
+# ---------------------------------------------------------------------------
+# Policy
+# ---------------------------------------------------------------------------
+# Two ways to handle an under-specified question, and the project measures both
+# rather than asserting one:
+#
+#   STRICT    refuse, and ask which reading was meant.
+#   DISCLOSE  answer using a certified default, and SAY SO -- naming the
+#             assumption and what the alternatives would have returned.
+#
+# DISCLOSE is not a weaker STRICT. The failure this project exists to measure is
+# a *confident* wrong number; an answer that states its assumption and the size
+# of the alternatives is not confident, so it is not that failure. What it costs
+# is that the reader has to actually read the note.
+#
+# A dimension only gets a default when convention genuinely supplies one. Where
+# the competing readings are different OBJECTS rather than different framings of
+# one object -- Swachh Bharat Gramin and Urban are two schemes, run by two
+# ministries, funding two things -- there is nothing to default to, and DISCLOSE
+# refuses exactly as STRICT does.
+STRICT = "strict"
+DISCLOSE = "disclose"
+
+# dimension -> (default value, label, why this default and not another)
+CERTIFIED_DEFAULTS = {
+    "estimate_basis": (
+        "be", "Budget Estimate",
+        "'the budget for X' conventionally means the Budget Estimate, and it is "
+        "the only basis available for every year in the data",
+    ),
+    "entity_scope": (
+        "all", "all spending, including functional lines",
+        "the published Grand Total includes Interest Payments and Defence "
+        "Pensions, so 'total expenditure' conventionally includes them",
+    ),
+    "receipts_borrowings": (
+        "revenue_only", "revenue receipts, excluding borrowings",
+        "borrowings are money owed, not income; 'government revenue' "
+        "conventionally excludes them",
+    ),
+    # Deliberately absent: scheme_identity and entity_identity. Two different
+    # schemes are not two readings of one number, and picking one silently is
+    # the error, not the fix.
+}
+
+
 @dataclass
 class Clarification:
     """One thing the question failed to pin down."""
@@ -48,6 +94,20 @@ class Clarification:
     options: list[str] = field(default_factory=list)
     why: str = ""
 
+    @property
+    def has_default(self) -> bool:
+        return self.dimension in CERTIFIED_DEFAULTS
+
+    @property
+    def default_label(self) -> str:
+        entry = CERTIFIED_DEFAULTS.get(self.dimension)
+        return entry[1] if entry else ""
+
+    @property
+    def default_reason(self) -> str:
+        entry = CERTIFIED_DEFAULTS.get(self.dimension)
+        return entry[2] if entry else ""
+
 
 @dataclass
 class Verdict:
@@ -56,10 +116,29 @@ class Verdict:
     reason: str = ""
     detected_years: list[str] = field(default_factory=list)
     rule: str = ""
+    # Assumptions taken under DISCLOSE. Empty under STRICT, because STRICT
+    # never assumes anything -- it asks.
+    assumptions: list[Clarification] = field(default_factory=list)
 
     @property
     def should_refuse(self) -> bool:
         return self.outcome is not Outcome.ANSWERABLE
+
+    def disclosure(self) -> str:
+        """The note attached to an answer that rested on an assumption.
+
+        This is what separates DISCLOSE from silently guessing. Without it the
+        answer is indistinguishable from the baseline's, and the whole point is
+        that it should not be.
+        """
+        if not self.assumptions:
+            return ""
+        lines = ["Assumed, because the question did not say:"]
+        for a in self.assumptions:
+            lines.append(f"  - {a.dimension.replace('_', ' ')}: {a.default_label}")
+            lines.append(f"    ({a.default_reason})")
+        lines.append("Ask again naming a different reading if that is not what you meant.")
+        return "\n".join(lines)
 
     def as_message(self) -> str:
         """What the user actually sees when refused."""
@@ -200,8 +279,14 @@ def _scope_in(text: str) -> str | None:
     return None
 
 
-def assess(question: str) -> Verdict:
-    """Decide whether a question can be answered, refused, or must be asked back."""
+def assess(question: str, policy: str = STRICT) -> Verdict:
+    """Decide whether a question can be answered, refused, or must be asked back.
+
+    `policy` selects what to do about an under-specified question that has a
+    certified default. STRICT asks; DISCLOSE answers and states the assumption.
+    Neither changes what counts as UNANSWERABLE -- a figure that does not exist
+    does not become available by relaxing policy.
+    """
     text = " " + question.lower().strip() + " "
     years = extract_years(question)
     clarifications: list[Clarification] = []
@@ -320,7 +405,13 @@ def assess(question: str) -> Verdict:
 
     # --- AMBIGUOUS: an entity that was renamed, over a span crossing it ----
     for key, options in RENAMED_ENTITIES.items():
-        if key in text and _mentions(text, ("ministry", "department", "spending on")):
+        # The guard used to require the words "ministry", "department" or
+        # "spending on", which missed the commonest phrasing -- "what did we
+        # spend on education". Under STRICT that miss was invisible, because
+        # such questions were refused on estimate_basis anyway; DISCLOSE
+        # removed that cover and exposed it. Any money question naming a
+        # renamed entity qualifies.
+        if key in text and is_money:
             crosses = len(years) > 1 or _mentions(text, ("since", "over time", "trend", "each year", "across"))
             if crosses and not any(o.split(" (")[0].lower() in text for o in options):
                 clarifications.append(
@@ -334,6 +425,29 @@ def assess(question: str) -> Verdict:
             break
 
     if clarifications:
+        if policy == DISCLOSE:
+            # Split: dimensions with a certified default become stated
+            # assumptions; anything without one still blocks. A question that
+            # is only under-specified on defaultable dimensions becomes
+            # answerable WITH a disclosure. One that names two different
+            # schemes does not, in either policy.
+            assumed = [c for c in clarifications if c.has_default]
+            blocking = [c for c in clarifications if not c.has_default]
+            if not blocking:
+                return Verdict(
+                    Outcome.ANSWERABLE,
+                    assumptions=assumed,
+                    detected_years=years,
+                    rule="disclosed:" + "+".join(c.dimension for c in assumed),
+                )
+            return Verdict(
+                Outcome.AMBIGUOUS,
+                clarifications=blocking,
+                assumptions=assumed,
+                detected_years=years,
+                rule="+".join(c.dimension for c in blocking),
+            )
+
         return Verdict(
             Outcome.AMBIGUOUS,
             clarifications=clarifications,

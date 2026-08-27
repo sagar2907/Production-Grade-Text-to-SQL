@@ -147,6 +147,7 @@ Two things the real file taught the schema, which I would not have invented:
 ```
 CORRECT             answered, result matches gold
 CONFIDENTLY_WRONG   returned a clean, plausible, WRONG number     <- the headline
+ANSWERED_DISCLOSED  answered an under-specified question, assumption stated
 WRONG_ORDER         right values, wrong sequence
 ERRORED             failed after repair; visible, therefore safe
 REFUSED_RIGHTLY     declined a question with no single answer
@@ -276,6 +277,57 @@ That is not hypothetical — it caught two real errors in this project:
    mean, and `scripts/update_readme.py` reads it from the variance file
    directly so a future single run cannot quietly replace it.
 
+## Refuse, or answer and disclose?
+
+Refusing an under-specified question is not the only safe option. The failure
+this project measures is a *confident* wrong number — and a figure delivered
+with its assumption named is not confident. So the refusal behaviour is a
+switchable policy, and both settings are measured rather than argued about.
+
+- **STRICT** — refuse, and ask which reading was meant. (default)
+- **DISCLOSE** — answer using a certified default, and say so: name the
+  assumption and why it is the conventional reading.
+
+A dimension only gets a default where convention supplies one. `estimate_basis`
+does ("the budget for X" means Budget Estimate). `scheme_identity` does not —
+Swachh Bharat Gramin and Urban are two schemes under two ministries, and
+picking one silently is the error, not the fix. **DISCLOSE refuses those
+exactly as STRICT does**, and neither policy can make missing data appear.
+
+| | baseline | STRICT | DISCLOSE |
+|---|---:|---:|---:|
+| confidently wrong | 76.7% | **16.7%** | 20.0% |
+| execution accuracy | 34.4% | 53.1% | 53.1% |
+| refusal rate | 0% | 46.7% | **30.0%** |
+| refusal recall | 0% | 100% | 92.9% |
+| answered with a stated assumption | 0 | 0 | **8** |
+
+DISCLOSE answers 10 questions STRICT refuses. Eight match the certified
+default exactly. The refusal rate falls by 16.7 points — a system that refuses
+nearly half of everything asked is a system people stop asking.
+
+The cost is 2 questions, and **2 questions is only about twice the measured
+noise**, so this is a real difference but not a comfortable one. Both are the
+same new failure mode, and it is worth naming because it does not exist under
+STRICT: **the stated assumption and the actual figure can disagree.** On A10
+the note said "revenue receipts, Budget Estimate" and the query summed
+`net_to_centre_crore` — a mislabel is worse than a refusal, because the label
+makes it look checked.
+
+That failure is a model limit rather than a design one: the pin now says *"not
+net_to_centre_crore"* in those words and the 7B used it anyway. A stronger
+generator would likely close it, which is testable by re-running with
+`--model`.
+
+**STRICT remains the default.** DISCLOSE exists because which one is right
+depends on who is asking — an analyst who knows BE from RE, or someone about
+to print the number — and that is a product decision, not a data question. It
+is now a one-line change with both sides measured.
+
+```bash
+python scripts/run_eval.py --arm all
+```
+
 ## Two generators, same harness
 
 The same 60 questions, the same schema, the same semantic layer — two different models.
@@ -334,6 +386,7 @@ scripts/verify_gold.py   gold SQL + refusal-rule agreement + trap checks
 scripts/audit_gold.py    independent verification of all 32 gold queries
 scripts/run_eval.py      both ablation arms
 scripts/measure_variance.py  how much of the result is harness noise
+scripts/adjudicate.py    evidence behind the 28 refusal categorizations
 scripts/capture_demo.py  regenerates the transcript above from a real run
 semantic/glossary.yaml   what each ambiguous column actually means
 semantic/metrics.yaml    certified metrics and the dimensions they require

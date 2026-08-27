@@ -49,6 +49,14 @@ class Answer:
     refusal_rule: str = ""
     resolution: Resolution | None = None
     arm: str = ""
+    # Non-empty when the answer rested on a certified default under the
+    # DISCLOSE policy. An answer carrying this is qualified, not confident,
+    # which is the distinction the evaluation turns on.
+    disclosure: str = ""
+
+    @property
+    def was_disclosed(self) -> bool:
+        return bool(self.disclosure)
 
     @property
     def rows(self) -> list[tuple]:
@@ -64,18 +72,50 @@ class Answer:
         return f"ANSWERED, {n} row(s)"
 
 
+# How an assumed dimension is expressed to the generator. Must agree with
+# ambiguity.CERTIFIED_DEFAULTS -- if the disclosure says "Budget Estimate" and
+# the prompt does not pin be_amount_crore, the note and the number disagree,
+# which is a worse failure than either policy alone.
+# A pin must fix EVERY column the answer depends on, not just the one the
+# dimension is named after. An earlier version of the receipts pin named only
+# the filter; the model applied it correctly and then summed
+# net_to_centre_crore instead of be_amount_crore, producing an answer whose
+# stated assumption and actual figure disagreed. That is a worse failure than
+# refusing, because the label makes it look checked.
+_PIN_TEXT = {
+    "estimate_basis": "Use be_amount_crore (Budget Estimate). Not RE, not actuals.",
+    "entity_scope": "Include ALL spending entities. Do not filter entity_kind.",
+    "receipts_borrowings": (
+        "Filter is_revenue_receipt = TRUE (exclude borrowings) AND sum "
+        "be_amount_crore -- not net_to_centre_crore, not gross_amount_crore."
+    ),
+}
+
+
+def _pin(assumptions) -> str:
+    lines = ["THE QUESTION IS UNDER-SPECIFIED. These readings are fixed for you:"]
+    for a in assumptions:
+        lines.append("  " + _PIN_TEXT.get(a.dimension, a.default_label))
+    return "\n".join(lines)
+
+
 @dataclass
 class Pipeline:
     db: Database
     provider: Provider
     use_semantic_layer: bool = True
+    # STRICT refuses an under-specified question; DISCLOSE answers it with a
+    # certified default and states the assumption. See ambiguity.py.
+    policy: str = ambiguity.STRICT
     layer: SemanticLayer = field(default_factory=load_semantic_layer)
     _schema: str | None = field(default=None, repr=False)
     _semantic: str | None = field(default=None, repr=False)
 
     @property
     def arm(self) -> str:
-        return "semantic" if self.use_semantic_layer else "baseline"
+        if not self.use_semantic_layer:
+            return "baseline"
+        return "semantic" if self.policy == ambiguity.STRICT else "semantic-disclose"
 
     @property
     def schema(self) -> str:
@@ -97,8 +137,11 @@ class Pipeline:
         return self._semantic
 
     def ask(self, question: str) -> Answer:
+        disclosure = ""
+        semantic = self.semantic
+
         if self.use_semantic_layer:
-            verdict = ambiguity.assess(question)
+            verdict = ambiguity.assess(question, policy=self.policy)
             if verdict.should_refuse:
                 return Answer(
                     AnswerKind.REFUSED,
@@ -107,9 +150,14 @@ class Pipeline:
                     refusal_rule=verdict.rule,
                     arm=self.arm,
                 )
+            if verdict.assumptions:
+                disclosure = verdict.disclosure()
+                # The assumption has to reach the generator too, or the answer
+                # is disclosed as one thing and computed as another.
+                semantic = (semantic or "") + "\n\n" + _pin(verdict.assumptions)
 
         resolution = resolve(
-            question, self.db, self.schema, self.provider, semantic=self.semantic
+            question, self.db, self.schema, self.provider, semantic=semantic
         )
 
         if resolution.succeeded:
@@ -120,6 +168,7 @@ class Pipeline:
                 result=resolution.result,
                 resolution=resolution,
                 arm=self.arm,
+                disclosure=disclosure,
             )
 
         return Answer(
@@ -128,4 +177,5 @@ class Pipeline:
             sql=resolution.sql,
             resolution=resolution,
             arm=self.arm,
+            disclosure=disclosure,
         )

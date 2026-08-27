@@ -369,6 +369,8 @@ questions:
   question: How much did the government spend in 2019-20?
   why: estimate basis not pinned, and entity scope not pinned
   measured_spread: 4.89x   # BE/RE/Actual differ 10%; all-spending vs ministries-only differ 4.9x
+  default_gold_sql: |
+    SELECT SUM(be_amount_crore) FROM budget_allocations WHERE fiscal_year = '2019-20'
 
 - id: A02
   category: ambiguous
@@ -376,6 +378,10 @@ questions:
   question: What is the budget for the Ministry of Railways in 2020-21?
   why: '"budget" could mean Budget Estimate, Revised Estimate or Actuals'
   measured_spread: 1.24x   # BE 181,078 / RE 187,430 / Actuals 151,311
+  default_gold_sql: |
+    SELECT SUM(a.be_amount_crore) FROM budget_allocations a
+    JOIN ministries m ON a.ministry_id = m.ministry_id
+    WHERE a.fiscal_year = '2020-21' AND m.ministry_name = 'Ministry of Railways'
 
 - id: A03
   category: ambiguous
@@ -390,6 +396,8 @@ questions:
   question: What was total expenditure in 2021-22?
   why: estimate basis and entity scope both unpinned
   measured_spread: 5.40x   # widest in the set; scope alone spans 3,563,553 to 660,259
+  default_gold_sql: |
+    SELECT SUM(be_amount_crore) FROM budget_allocations WHERE fiscal_year = '2021-22'
 
 - id: A05
   category: ambiguous
@@ -418,6 +426,8 @@ questions:
   question: What was the overall budget in 2018-19?
   why: estimate basis and entity scope unpinned
   measured_spread: 4.86x   # scope spans 2,682,328 to 555,769
+  default_gold_sql: |
+    SELECT SUM(be_amount_crore) FROM budget_allocations WHERE fiscal_year = '2018-19'
 
 - id: A09
   category: ambiguous
@@ -425,6 +435,10 @@ questions:
   question: How much did the Ministry of Railways get in 2017-18?
   why: estimate basis unpinned
   measured_spread: 1.14x   # tightest basis case: BE 126,848 / RE 130,077 / Actuals 114,534
+  default_gold_sql: |
+    SELECT SUM(a.be_amount_crore) FROM budget_allocations a
+    JOIN ministries m ON a.ministry_id = m.ministry_id
+    WHERE a.fiscal_year = '2017-18' AND m.ministry_name = 'Ministry of Railways'
 
 - id: A10
   category: ambiguous
@@ -432,6 +446,9 @@ questions:
   question: What was government revenue in 2020-21?
   why: revenue receipts only, or total receipts including borrowings?
   measured_spread: 1.49x   # revenue receipts 2,819,070 vs total incl. borrowings 4,193,878
+  default_gold_sql: |
+    SELECT SUM(be_amount_crore) FROM receipts
+    WHERE fiscal_year = '2020-21' AND is_revenue_receipt = TRUE
 
 - id: A11
   category: ambiguous
@@ -439,6 +456,8 @@ questions:
   question: Show total spending across all years.
   why: estimate basis and entity scope unpinned
   measured_spread: 1.55x   # actuals cover only 7 of 10 years, so the series is not comparable
+  default_gold_sql: |
+    SELECT SUM(be_amount_crore) FROM budget_allocations
 
 - id: A12
   category: ambiguous
@@ -460,6 +479,10 @@ questions:
   question: How much did the centre spend on rural development in 2020-21?
   why: estimate basis unpinned
   measured_spread: 1.14x   # BE 128,606 / RE 129,887 / Actuals 113,472
+  default_gold_sql: |
+    SELECT SUM(a.be_amount_crore) FROM budget_allocations a
+    JOIN ministries m ON a.ministry_id = m.ministry_id
+    WHERE a.fiscal_year = '2020-21' AND m.sector = 'rural'
 
 - id: A15
   category: ambiguous
@@ -467,6 +490,8 @@ questions:
   question: What was the entire budget for 2016-17?
   why: estimate basis and entity scope unpinned
   measured_spread: 4.65x   # scope spans 2,225,721 to 478,821
+  default_gold_sql: |
+    SELECT SUM(be_amount_crore) FROM budget_allocations WHERE fiscal_year = '2016-17'
 
 - id: A16
   category: ambiguous
@@ -474,6 +499,8 @@ questions:
   question: Tell me the total outlay in 2015-16.
   why: estimate basis and entity scope unpinned
   measured_spread: 4.63x   # scope spans 2,004,368 to 432,746
+  default_gold_sql: |
+    SELECT SUM(be_amount_crore) FROM budget_allocations WHERE fiscal_year = '2015-16'
 
 # ---------------------------------------------------------------------------
 # UNANSWERABLE -- no data exists; refuse, do not return zero

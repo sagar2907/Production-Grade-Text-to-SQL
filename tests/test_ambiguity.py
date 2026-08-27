@@ -19,7 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from rosetta.ambiguity import (  # noqa: E402
-    NO_ACTUALS, NO_RE, PLAN_ERA, Outcome, assess, extract_years,
+    CERTIFIED_DEFAULTS, DISCLOSE, NO_ACTUALS, NO_RE, PLAN_ERA, STRICT,
+    Outcome, assess, extract_years,
 )
 from rosetta.db import Database  # noqa: E402
 
@@ -173,6 +174,70 @@ def test_unanswerable_message_explains_why():
     v = assess("What was Plan expenditure in 2019-20?")
     message = v.as_message()
     assert "2017-18" in message
+
+
+# --- policy: STRICT vs DISCLOSE --------------------------------------------
+
+def test_disclose_answers_a_basis_only_question():
+    q = "What is the budget for the Ministry of Railways in 2020-21?"
+    assert assess(q, policy=STRICT).outcome is Outcome.AMBIGUOUS
+    v = assess(q, policy=DISCLOSE)
+    assert v.outcome is Outcome.ANSWERABLE
+    assert v.assumptions and v.assumptions[0].dimension == "estimate_basis"
+
+
+def test_disclose_states_what_it_assumed():
+    # The disclosure is the whole difference between this and the baseline
+    # silently guessing. If it is empty the policy is indefensible.
+    v = assess("What is the budget for the Ministry of Railways in 2020-21?",
+               policy=DISCLOSE)
+    note = v.disclosure()
+    assert "Budget Estimate" in note
+    assert "Assumed" in note
+
+
+def test_disclose_still_refuses_two_different_schemes():
+    # Gramin and Urban are different schemes under different ministries.
+    # There is no default to fall back on, so policy must not help here.
+    q = "How much was allocated to Swachh Bharat in 2019-20?"
+    for policy in (STRICT, DISCLOSE):
+        assert assess(q, policy=policy).outcome is Outcome.AMBIGUOUS
+
+
+def test_disclose_still_refuses_a_renamed_entity():
+    q = "How much was spent on water ministry programmes over time?"
+    assert assess(q, policy=DISCLOSE).outcome is Outcome.AMBIGUOUS
+
+
+def test_policy_cannot_conjure_missing_data():
+    # UNANSWERABLE is about what the data contains. No policy setting can
+    # change that, and a policy that could would be the worst bug in the repo.
+    for q in ("What was Plan expenditure in 2019-20?",
+              "What was actually spent in 2023-24?",
+              "Give me the Revised Estimate for 2023-24."):
+        for policy in (STRICT, DISCLOSE):
+            assert assess(q, policy=policy).outcome is Outcome.UNANSWERABLE
+
+
+def test_strict_is_the_default_policy():
+    q = "What is the budget for the Ministry of Railways in 2020-21?"
+    assert assess(q).outcome is assess(q, policy=STRICT).outcome
+
+
+def test_identity_dimensions_have_no_default():
+    # If either of these ever gains a default, DISCLOSE starts silently
+    # picking one of two different schemes, which is the failure this whole
+    # project measures.
+    assert "scheme_identity" not in CERTIFIED_DEFAULTS
+    assert "entity_identity" not in CERTIFIED_DEFAULTS
+
+
+def test_education_question_carries_entity_ambiguity():
+    # Regression: the renamed-entity guard used to require the words
+    # "ministry"/"department"/"spending on" and missed "spend on education".
+    # STRICT hid it by refusing on basis anyway; DISCLOSE exposed it.
+    v = assess("What did we spend on education each year since 2014?", policy=STRICT)
+    assert "entity_identity" in {c.dimension for c in v.clarifications}
 
 
 # --- the constants must match the database ---------------------------------

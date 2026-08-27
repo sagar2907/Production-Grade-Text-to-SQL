@@ -55,6 +55,14 @@ class Outcome(str, Enum):
     # cannot afford to do. It is excluded from CORRECT too, because the gold
     # query did ask for an order.
     WRONG_ORDER = "wrong_order"
+    # Answered an under-specified question using a certified default, and
+    # STATED the assumption. Deliberately not CONFIDENTLY_WRONG: the failure
+    # being measured is a confident wrong number, and a figure delivered with
+    # its assumption named is not confident. Deliberately not CORRECT either --
+    # the reader still has to read the note, and a system that disclosed
+    # everything would be as useless as one that refused everything. Counted
+    # and reported on its own line so neither pretence is available.
+    ANSWERED_DISCLOSED = "answered_disclosed"
     ERRORED = "errored"
     REFUSED_RIGHTLY = "refused_rightly"
     REFUSED_WRONGLY = "refused_wrongly"
@@ -142,11 +150,18 @@ class RunReport:
 
     @property
     def refusal_recall(self) -> float:
-        """Of the questions that should be refused, how many were."""
+        """Of the questions needing a refusal, how many were handled safely.
+
+        A disclosed answer counts as handled: the reader was told what was
+        assumed, so they were not misled. Counting it as a miss would make
+        DISCLOSE look like the baseline, which is exactly the distinction that
+        matters -- the baseline answered the same questions with no note at all.
+        """
         pool = self.refusable
         if not pool:
             return 0.0
-        return sum(1 for r in pool if r.outcome is Outcome.REFUSED_RIGHTLY) / len(pool)
+        safe = (Outcome.REFUSED_RIGHTLY, Outcome.ANSWERED_DISCLOSED)
+        return sum(1 for r in pool if r.outcome in safe) / len(pool)
 
     @property
     def repair_rescue_rate(self) -> float:
@@ -232,6 +247,26 @@ def classify(answer: Answer, question: dict[str, Any], db: Database) -> tuple[Ou
 
     # It answered. Whether that is correct depends on what was asked.
     if expect == "refuse":
+        if answer.was_disclosed:
+            # Under DISCLOSE this question was answered on purpose, with the
+            # assumption stated. Whether the FIGURE is right is still checked
+            # below against the default reading's gold; getting here only means
+            # answering was policy, not a lapse.
+            gold_default = question.get("default_gold_sql")
+            if gold_default:
+                gold = db.execute(gold_default)
+                if gold.ok:
+                    cmp = compare_result_sets(
+                        answer.rows, gold.rows,
+                        order_matters=gold_requires_order(gold_default),
+                    )
+                    if cmp.is_correct:
+                        return Outcome.ANSWERED_DISCLOSED, "matched the certified default"
+                    return (
+                        Outcome.CONFIDENTLY_WRONG,
+                        f"disclosed an assumption then computed something else: {cmp.reason}",
+                    )
+            return Outcome.ANSWERED_DISCLOSED, "disclosed, no default gold to check against"
         return (
             Outcome.CONFIDENTLY_WRONG,
             "produced a number for a question with no single certified answer",
@@ -296,6 +331,7 @@ def run(
                 Outcome.REFUSED_RIGHTLY: "ref ",
                 Outcome.REFUSED_WRONGLY: "REF?",
                 Outcome.WRONG_ORDER: "ord ",
+                Outcome.ANSWERED_DISCLOSED: "disc",
             }[outcome]
             print(f"  [{i:>2}/{len(questions)}] {question['id']:5s} {mark}  "
                   f"{elapsed:>5.1f}s  {detail[:56]}", flush=True)
@@ -318,6 +354,8 @@ def format_summary(report: RunReport) -> str:
         f"   {report.confidently_wrong_rate:>6.1%}   <- the number",
         f"  correct             {report.count(Outcome.CORRECT):>3}"
         f"   {report.execution_accuracy:>6.1%}   (of answerable)",
+        f"  answered+disclosed  {report.count(Outcome.ANSWERED_DISCLOSED):>3}"
+        f"        (assumption stated)",
         f"  wrong order         {report.count(Outcome.WRONG_ORDER):>3}"
         f"        (right values, wrong sequence)",
         f"  errored             {report.count(Outcome.ERRORED):>3}",

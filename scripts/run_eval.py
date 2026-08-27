@@ -24,6 +24,7 @@ from rosetta.evaluate import (                                       # noqa: E40
     compare_arms, format_summary, load_questions, run, write_report,
 )
 from rosetta.generate import OllamaProvider, available_models, default_provider  # noqa: E402
+from rosetta.ambiguity import DISCLOSE, STRICT                       # noqa: E402
 from rosetta.pipeline import Pipeline                                # noqa: E402
 
 QUESTIONS = ROOT / "eval" / "questions.yaml"
@@ -33,7 +34,12 @@ RESULTS = ROOT / "results"
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--arm", choices=["baseline", "semantic", "both"], default="both")
+    parser.add_argument(
+        "--arm",
+        choices=["baseline", "semantic", "disclose", "both", "all"],
+        default="both",
+        help="'both' = baseline + semantic(strict); 'all' adds the disclose policy",
+    )
     parser.add_argument("--model", default=None, help="ollama model tag")
     parser.add_argument("--limit", type=int, default=None, help="first N questions only")
     parser.add_argument("--quiet", action="store_true")
@@ -68,14 +74,22 @@ def main() -> int:
     print(f"questions: {len(questions)}")
     print()
 
-    arms = ["baseline", "semantic"] if args.arm == "both" else [args.arm]
+    if args.arm == "both":
+        arms = ["baseline", "semantic"]
+    elif args.arm == "all":
+        arms = ["baseline", "semantic", "disclose"]
+    else:
+        arms = [args.arm]
     reports = {}
 
     for arm in arms:
         print(f"--- {arm} arm ---")
         db = Database(DB)
         pipeline = Pipeline(
-            db=db, provider=provider, use_semantic_layer=(arm == "semantic")
+            db=db,
+            provider=provider,
+            use_semantic_layer=(arm != "baseline"),
+            policy=DISCLOSE if arm == "disclose" else STRICT,
         )
         report = run(pipeline, questions, progress=not args.quiet)
         db.close()
