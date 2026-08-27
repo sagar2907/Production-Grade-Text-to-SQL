@@ -5,7 +5,7 @@
 <!-- RESULTS-START -->
 > **Confidently wrong answers fell from 77% to 17%** on a 60-question evaluation set — identical model, identical schema, semantic layer switched off and on.
 >
-> Measured with `ollama:qwen2.5-coder:7b`. 28 of the 60 questions have no single certified answer and should be refused rather than answered.
+> Mean of **3 runs per arm**, not a single run: baseline 76.7% (76.7%–76.7%), semantic 17.2% (16.7%–18.3%). Measured with `ollama:qwen2.5-coder:7b`. 28 of the 60 questions have no single certified answer and should be refused rather than answered.
 <!-- RESULTS-END -->
 
 ## What that looks like
@@ -201,11 +201,11 @@ Needs a local [Ollama](https://ollama.com) server. `qwen2.5-coder:7b` fits in ~6
 ## Results
 
 <!-- ABLATION-START -->
-Model: `ollama:qwen2.5-coder:7b` · n = 60 · 502s total
+Model: `ollama:qwen2.5-coder:7b` · n = 60 · 830s total · single run below; see the variance section for the 3-run mean
 
 | metric | baseline | semantic | delta |
 |---|---:|---:|---:|
-| confidently wrong | 76.7% | **16.7%** | -60.0 pts ✓ |
+| confidently wrong | 75.0% | **18.3%** | -56.7 pts ✓ |
 | execution accuracy | 34.4% | **53.1%** | +18.7 pts ✓ |
 | refusal recall | 0.0% | **100.0%** | +100.0 pts ✓ |
 | refusal precision | 0.0% | **100.0%** | +100.0 pts ✓ |
@@ -215,9 +215,9 @@ Outcome counts:
 | outcome | baseline | semantic |
 |---|---:|---:|
 | `correct` | 11 | 17 |
-| `confidently_wrong` | 46 | 10 |
-| `wrong_order` | 1 | 4 |
-| `errored` | 2 | 1 |
+| `confidently_wrong` | 45 | 11 |
+| `wrong_order` | 1 | 3 |
+| `errored` | 3 | 1 |
 | `refused_rightly` | 0 | 28 |
 
 Per trap (correct / total):
@@ -229,7 +229,7 @@ Per trap (correct / total):
 | entity_scope | 0/1 | 0/1 |
 | estimate_basis | 0/1 | 0/1 |
 | fan_out | 0/1 | 0/1 |
-| gross_net | 1/1 | 1/1 |
+| gross_net | 0/1 | 1/1 |
 | null_join | 1/1 | 1/1 |
 | plan_era | 0/1 | 1/1 |
 | rename | 0/1 | 0/1 |
@@ -247,27 +247,34 @@ questions, temperature 0. `python scripts/measure_variance.py --repeats 3`
 
 | | baseline | semantic |
 |---|---|---|
-| confidently wrong | 76.7% every run, **0.0 pts spread** | 16.7% every run, **0.0 pts spread** |
-| execution accuracy | 34.4% every run, 0.0 pts spread | 53.1–56.2%, 3.1 pts spread |
-| questions with an unstable outcome | **0 of 60** | **1 of 60** (Q05, flapping `correct` ↔ `wrong_order`) |
+| confidently wrong | 76.7% every run, **0.0 pts spread** | 17.2% mean, 16.7–18.3%, **1.7 pts** |
+| execution accuracy | 34.4% every run, 0.0 pts spread | 52.1% mean, 50.0–53.1%, 3.1 pts |
+| questions with an unstable outcome | **0 of 60** | **1 of 60** |
 
-**Effect 60.0 pts against noise 0.0–3.1 pts.** The headline is not a lucky run.
+**Effect 59.4 pts against noise 1.7 pts — a ratio of 35.7×.** The headline is
+not a lucky run.
 
 Two things worth stating precisely, because they cut in opposite directions:
 
-- *Within* a single `ollama serve` session the eval is effectively
-  deterministic — one borderline question moves, nothing else.
-- *Across* a server restart it shifts by about one question (an earlier run
-  recorded a 75.0% baseline where these three all record 76.7%). GPU batching
-  and KV-cache state differ on a cold start. So results are reproducible within
-  a session and approximately reproducible across them, and any claimed
-  improvement smaller than ~2 questions should not be believed.
+- *Within* one Python process running repeats back to back, the baseline arm is
+  bit-stable — three identical results, no question changing outcome.
+- *Across* separate invocations the model is reloaded, and each arm moves by
+  about one question. Baseline has been observed at both 75.0% and 76.7%;
+  semantic at 16.7% and 18.3%.
 
-That second point is not hypothetical. It caught a real error in this project:
-an expansion of the semantic layer appeared to improve execution accuracy until
-the variance run showed the movement was inside the spread. It fixed two
-specific behaviours (see below) without moving the headline at all, and is
-reported that way rather than as a gain.
+So: **reproducible to about ±1 question per arm**, and any claimed improvement
+smaller than that is not distinguishable from a reload.
+
+That is not hypothetical — it caught two real errors in this project:
+
+1. An expansion of the semantic layer *appeared* to improve execution accuracy.
+   The variance run showed the movement was inside the spread. It fixed two
+   specific behaviours (below) and moved the headline by nothing, and is
+   reported that way rather than as a gain.
+2. A single run recorded a 75.0% baseline. Quoting it would have inflated the
+   effect by 1.7 points over the three-run mean. The headline above uses the
+   mean, and `scripts/update_readme.py` reads it from the variance file
+   directly so a future single run cannot quietly replace it.
 
 ## Two generators, same harness
 
@@ -342,14 +349,19 @@ src/rosetta/evaluate.py  the outcome taxonomy and the ablation
 
 ## Known limitations
 
-- **The 28 refusal categorizations are unreviewed.** The 32 gold SQL queries
-  are independently verified (`scripts/audit_gold.py`, 32/32); the judgement
-  calls about which questions *should* be refused are not, and no script can
-  settle them. This is the largest open item. See `eval/gold_audit_report.md`,
-  which also notes that six of the sixteen `ambiguous` questions test the same
-  underlying ambiguity reworded.
+- **One open item, and it is a product decision.** The 32 gold SQL queries are
+  independently verified (`scripts/audit_gold.py`, 32/32). The 28 refusal
+  categorizations are adjudicated (`scripts/adjudicate.py`): the 12
+  `unanswerable` are fact-checked against the data, and the 16 `ambiguous` are
+  measured — every one conceals a discrepancy of at least 1.14×, nine of 1.5×
+  or more, none below 10%. What that does *not* settle is whether to refuse or
+  to pick a default: `metrics.yaml` already gives `gross_net` a certified
+  default, and `estimate_basis` could have one too. That is a one-line change
+  worth roughly nine of the sixteen refusals, and it depends on who the reader
+  is. See `eval/gold_audit_report.md`.
 - **Row-level detail is synthetic.** Structure and magnitudes are real; the detail is not.
 - **Single dialect.** DuckDB only. Multi-dialect compilation was cut for scope.
 - **No row-level security.** Every query runs as the same read-only role. Real warehouses enforce per-user visibility and benchmarks that ignore it overstate accuracy.
 - **Ambiguity rules are keyword-based.** They are deterministic and auditable, which is the trade being made, but they will miss paraphrases a model would catch. The 100% refusal recall reported above is against *this* question set; a set written by someone else would score lower.
+- **Agreement between the rules and the gold set is not evidence.** Both were written by the same author from the same assumptions, and `verify_gold.py` reported 60/60 agreement while two questions (U06, U12) were wrong in exactly the same way in both. Only checking each against the *data* found it. That check is now `scripts/adjudicate.py`.
 - **Results are session-reproducible, not bit-reproducible.** Identical within one `ollama serve` session; about one question of drift across a restart. See the variance section.

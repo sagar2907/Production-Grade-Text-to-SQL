@@ -36,17 +36,54 @@ def replace_block(text: str, marker: str, body: str) -> str:
     return f"{head}{start}\n{body}\n{end}{tail}"
 
 
+def load_variance() -> dict | None:
+    path = RESULTS / "variance.json"
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def headline_block(baseline: dict, semantic: dict) -> str:
+    """Headline from the repeated measurement, not from a single run.
+
+    A single run is the wrong thing to quote: separate invocations reload the
+    model, and the result moves by about one question per arm. The variance
+    file holds three runs of each arm, so the mean and range go on the page
+    and the reader can see the resolution limit rather than infer a precision
+    the harness does not have.
+    """
+    var = load_variance()
+    n_refuse = len([r for r in semantic["results"] if r["expect"] == "refuse"])
+
+    if var and "baseline" in var and "semantic" in var:
+        b = var["baseline"]["stats"]["confidently_wrong_rate"]
+        s = var["semantic"]["stats"]["confidently_wrong_rate"]
+        runs = len(var["semantic"]["runs"])
+        spread = (
+            f"{s['min']:.1%}–{s['max']:.1%}" if s["spread"] > 0
+            else f"{s['mean']:.1%} every run"
+        )
+        return (
+            f"> **Confidently wrong answers fell from {b['mean']:.0%} to "
+            f"{s['mean']:.0%}** on a {semantic['total']}-question evaluation set "
+            f"— identical model, identical schema, semantic layer switched off "
+            f"and on.\n>\n"
+            f"> Mean of **{runs} runs per arm**, not a single run: baseline "
+            f"{b['mean']:.1%} ({b['min']:.1%}–{b['max']:.1%}), semantic "
+            f"{s['mean']:.1%} ({spread}). Measured with `{semantic['model']}`. "
+            f"{n_refuse} of the {semantic['total']} questions have no single "
+            f"certified answer and should be refused rather than answered."
+        )
+
     cw_b = baseline["headline"]["confidently_wrong_rate"]
     cw_s = semantic["headline"]["confidently_wrong_rate"]
     return (
         f"> **Confidently wrong answers fell from {cw_b:.0%} to {cw_s:.0%}** "
         f"on a {semantic['total']}-question evaluation set — identical model, "
         f"identical schema, semantic layer switched off and on.\n>\n"
-        f"> Measured with `{semantic['model']}`. "
-        f"{len([r for r in semantic['results'] if r['expect'] == 'refuse'])} of the "
-        f"{semantic['total']} questions have no single certified answer and should "
-        f"be refused rather than answered."
+        f"> Single run — run `scripts/measure_variance.py` for the spread. "
+        f"{n_refuse} of the {semantic['total']} questions have no single "
+        f"certified answer and should be refused rather than answered."
     )
 
 
@@ -57,9 +94,15 @@ def ablation_block(baseline: dict, semantic: dict) -> str:
         ("refusal recall", "refusal_recall", False),
         ("refusal precision", "refusal_precision", False),
     ]
+    var = load_variance()
+    note = ""
+    if var:
+        runs = len(var.get("semantic", {}).get("runs", []))
+        note = (f" · single run below; see the variance section for the "
+                f"{runs}-run mean")
     lines = [
         f"Model: `{semantic['model']}` · n = {semantic['total']} · "
-        f"{baseline['elapsed_seconds'] + semantic['elapsed_seconds']:.0f}s total",
+        f"{baseline['elapsed_seconds'] + semantic['elapsed_seconds']:.0f}s total{note}",
         "",
         "| metric | baseline | semantic | delta |",
         "|---|---:|---:|---:|",

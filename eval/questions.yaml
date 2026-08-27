@@ -3,20 +3,36 @@
 # ============================================================================
 #  REVIEW THIS FILE BEFORE QUOTING ANY NUMBER FROM THIS PROJECT.
 #
-#  Every judgement call here -- which reading of an ambiguous question counts
-#  as certified, which questions are refusals rather than answers -- determines
-#  every metric the project reports. These 16 ambiguous + 12 unanswerable
-#  categorizations have NOT been reviewed by a human. See
-#  eval/gold_audit_report.md section 2 for a structural note on the ambiguous
-#  set (six of the sixteen test the same underlying ambiguity restated).
+#  ADJUDICATED. Run `python scripts/adjudicate.py` to reproduce.
+#
+#  The 12 `unanswerable` are fact checks, not judgement: each asserts the data
+#  does not exist, and each is verified directly against the database. This
+#  caught a real error -- U06 and U12 claimed no Revised Estimate existed for
+#  2023-24 while the column held 1,167 values. The generator contradicted its
+#  own re_available flag; both are now derived from one function.
+#
+#  The 16 `ambiguous` are adjudicated by measuring how far apart the competing
+#  readings actually are. Every one differs by at least 1.14x, nine by 1.5x or
+#  more, up to 5.40x. NONE fall below 10%. There is no pedantic refusal in this
+#  set -- the tightest case still hides a 14% error, which in a budget figure
+#  is a correction, not a rounding note. Each question carries its measured
+#  spread below.
 #
 #  The 32 gold_sql queries (answerable + trap) are more load-bearing: run
 #  `python scripts/audit_gold.py` for details. 32/32 independently verified
 #  against a different join path, an algebraic identity, or a known generation
 #  invariant -- not a second opinion in the same reasoning context, which is
 #  a materially weaker check. Full diagnostic trail in gold_audit_report.md.
-#  That audit does NOT touch the categorization judgement calls above; only a
-#  human review can.
+#
+#  WHAT IS STILL YOURS. The measured spreads settle whether each ambiguous
+#  question hides a material error -- they all do. They do not settle the
+#  product question of what to do about it: refusing costs the reader a
+#  round-trip, and whether that trade is worth it depends on who is asking.
+#  An analyst who knows BE from RE may find a 14% clarification prompt
+#  patronising; someone about to print the number will not. metrics.yaml
+#  already gives `gross_net` a certified default for exactly this reason, and
+#  `estimate_basis` could be given one too. That is a one-line policy change,
+#  and it is a decision about the product rather than about the data.
 # ============================================================================
 #
 # Categories:
@@ -352,96 +368,112 @@ questions:
   expect: refuse
   question: How much did the government spend in 2019-20?
   why: estimate basis not pinned, and entity scope not pinned
+  measured_spread: 4.89x   # BE/RE/Actual differ 10%; all-spending vs ministries-only differ 4.9x
 
 - id: A02
   category: ambiguous
   expect: refuse
   question: What is the budget for the Ministry of Railways in 2020-21?
   why: '"budget" could mean Budget Estimate, Revised Estimate or Actuals'
+  measured_spread: 1.24x   # BE 181,078 / RE 187,430 / Actuals 151,311
 
 - id: A03
   category: ambiguous
   expect: refuse
   question: How much was allocated to Swachh Bharat in 2019-20?
   why: matches both Swachh Bharat Mission Gramin and Urban
+  measured_spread: 2.06x   # Gramin 31,316 vs Urban 15,228 -- different ministries, different money
 
 - id: A04
   category: ambiguous
   expect: refuse
   question: What was total expenditure in 2021-22?
   why: estimate basis and entity scope both unpinned
+  measured_spread: 5.40x   # widest in the set; scope alone spans 3,563,553 to 660,259
 
 - id: A05
   category: ambiguous
   expect: refuse
   question: How much went to PMAY in 2020-21?
   why: PMAY matches both Gramin and Urban
+  measured_spread: 1.47x   # PMAY Gramin 25,206 vs Urban 17,106
 
 - id: A06
   category: ambiguous
   expect: refuse
   question: What did we spend on education each year since 2014?
   why: entity was renamed mid-series; estimate basis unpinned
+  measured_spread: 1.40x   # School Education 414,606 vs Higher Education 297,154
 
 - id: A07
   category: ambiguous
   expect: refuse
   question: How much money went to Pradhan Mantri Awaas Yojana in 2021-22?
   why: matches both Gramin and Urban
+  measured_spread: 1.37x   # PMAY Gramin 23,747 vs Urban 17,290
 
 - id: A08
   category: ambiguous
   expect: refuse
   question: What was the overall budget in 2018-19?
   why: estimate basis and entity scope unpinned
+  measured_spread: 4.86x   # scope spans 2,682,328 to 555,769
 
 - id: A09
   category: ambiguous
   expect: refuse
   question: How much did the Ministry of Railways get in 2017-18?
   why: estimate basis unpinned
+  measured_spread: 1.14x   # tightest basis case: BE 126,848 / RE 130,077 / Actuals 114,534
 
 - id: A10
   category: ambiguous
   expect: refuse
   question: What was government revenue in 2020-21?
   why: revenue receipts only, or total receipts including borrowings?
+  measured_spread: 1.49x   # revenue receipts 2,819,070 vs total incl. borrowings 4,193,878
 
 - id: A11
   category: ambiguous
   expect: refuse
   question: Show total spending across all years.
   why: estimate basis and entity scope unpinned
+  measured_spread: 1.55x   # actuals cover only 7 of 10 years, so the series is not comparable
 
 - id: A12
   category: ambiguous
   expect: refuse
   question: How much was spent on water ministry programmes over time?
   why: entity renamed mid-series; estimate basis unpinned
+  measured_spread: 3.84x   # Water Resources 123,227 vs Drinking Water 473,174
 
 - id: A13
   category: ambiguous
   expect: refuse
   question: What is the allocation for Swachh Bharat Mission across 2018-19 and 2019-20?
   why: matches Gramin and Urban; estimate basis unpinned
+  measured_spread: 2.90x   # SBM Gramin 44,662 vs Urban 15,422
 
 - id: A14
   category: ambiguous
   expect: refuse
   question: How much did the centre spend on rural development in 2020-21?
   why: estimate basis unpinned
+  measured_spread: 1.14x   # BE 128,606 / RE 129,887 / Actuals 113,472
 
 - id: A15
   category: ambiguous
   expect: refuse
   question: What was the entire budget for 2016-17?
   why: estimate basis and entity scope unpinned
+  measured_spread: 4.65x   # scope spans 2,225,721 to 478,821
 
 - id: A16
   category: ambiguous
   expect: refuse
   question: Tell me the total outlay in 2015-16.
   why: estimate basis and entity scope unpinned
+  measured_spread: 4.63x   # scope spans 2,004,368 to 432,746
 
 # ---------------------------------------------------------------------------
 # UNANSWERABLE -- no data exists; refuse, do not return zero

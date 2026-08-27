@@ -47,6 +47,25 @@ YEARS = [(y, f"{y}-{str(y + 1)[2:]}") for y in range(2014, 2024)]
 LATEST_YEAR = YEARS[-1][0]
 REFERENCE_YEAR = 2024            # the year the real anchors describe
 
+
+def re_published(start: int) -> bool:
+    """Whether a Revised Estimate exists for the fiscal year beginning `start`.
+
+    RE for year Y is published with year Y+1's budget, so the most recent year
+    in this database does not have one yet. The database models a point DURING
+    2023-24, before the 2024-25 budget was presented: BE through 2023-24,
+    RE through 2022-23, actuals through 2021-22.
+
+    Every RE column in the loader is gated on this, and
+    fiscal_years.re_available is derived from it, so the flag and the data
+    cannot drift apart. They previously did: the flag said "no RE for 2023-24"
+    while the columns held 1,167 values, and two eval questions were written
+    against the flag rather than against the data. Neither the gold set nor the
+    refusal rules caught it, because both had been written from the same wrong
+    assumption -- agreement between them was never evidence of correctness.
+    """
+    return start <= LATEST_YEAR - 1
+
 # Ministries renamed or merged out of existence before the reference file
 # begins. Real events, real years.
 # (name, short, sector, from_year, to_year, successor_name)
@@ -205,7 +224,7 @@ def fy_rows():
             # "Actual spending in 2023-24" therefore has no honest answer,
             # which is one of the refusal cases the eval tests.
             "actuals_available": start <= LATEST_YEAR - 2,
-            "re_available": start <= LATEST_YEAR - 1,
+            "re_available": re_published(start),
             "presented_on": dt.date(start, 2, 1),
             "is_interim_budget": start == 2019,
             "notes": None,
@@ -500,7 +519,8 @@ def demand_rows():
                 "is_charged": False,
                 "voted_amount_crore": voted,
                 "charged_amount_crore": round(be - voted, 2),
-                "total_be_crore": be, "total_re_crore": re_,
+                "total_be_crore": be,
+                "total_re_crore": re_ if re_published(start) else None,
                 "total_actual_crore": act if start <= LATEST_YEAR - 2 else None,
                 "notes": None,
             })
@@ -558,7 +578,10 @@ def allocation_rows(demand_index):
                     "head_code": head, "state_code": state,
 
                     "be_amount_crore": be,
-                    "re_amount_crore": round(be * RE_BE * rng.uniform(0.88, 1.12), 3),
+                    "re_amount_crore": (
+                        round(be * RE_BE * rng.uniform(0.88, 1.12), 3)
+                        if re_published(start) else None
+                    ),
                     "actual_amount_crore": (
                         round(be * rng.uniform(0.72, 1.06), 3)
                         if start <= LATEST_YEAR - 2 else None
@@ -664,7 +687,10 @@ def receipt_rows():
                 "receipt_id": rid, "fiscal_year": label, "receipt_type": rtype,
                 "receipt_category": "union", "receipt_head": head, "head_code": None,
                 "be_amount_crore": be,
-                "re_amount_crore": round(be * RE_BE * rng.uniform(0.94, 1.06), 2),
+                "re_amount_crore": (
+                    round(be * RE_BE * rng.uniform(0.94, 1.06), 2)
+                    if re_published(start) else None
+                ),
                 "actual_amount_crore": (
                     round(be * rng.uniform(0.88, 1.06), 2)
                     if start <= LATEST_YEAR - 2 else None
@@ -698,7 +724,10 @@ def transfer_rows():
                     "ministry_id": m.id, "scheme_id": rng.choice(schemes_here).id,
                     "transfer_type": ttype, "finance_commission": fc,
                     "be_amount_crore": be,
-                    "re_amount_crore": round(be * RE_BE * rng.uniform(0.9, 1.1), 2),
+                    "re_amount_crore": (
+                        round(be * RE_BE * rng.uniform(0.9, 1.1), 2)
+                        if re_published(start) else None
+                    ),
                     "actual_amount_crore": (
                         round(be * rng.uniform(0.82, 1.05), 2)
                         if start <= LATEST_YEAR - 2 else None
