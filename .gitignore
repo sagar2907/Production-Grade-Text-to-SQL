@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# The database is a build artifact: scripts/load_data.py reproduces it
+# deterministically from the seed and the reference file.
+data/rosetta.duckdb
+
+# Downloaded archives and their extractions. Only the reference CSV is
+# load-bearing (scripts/reference.py reads it); the rest is re-downloadable
+# and one of the repos turned out to be a web app with no data in it.
+data/raw/*.zip
+data/raw/*/
+!data/raw/Indian-Union-Budget-Analysis-main/
+
+results/*.json
+results/*.log

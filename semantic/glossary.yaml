@@ -1,0 +1,183 @@
+# Column glossary.
+#
+# What each ambiguous column actually means, in the words someone who has read
+# the budget documents would use. This file exists because the column names do
+# not carry their own meaning: `be_amount_crore`, `gross_amount_crore` and
+# `plan_amount_crore` all look like "the amount", and picking the wrong one
+# produces a number that is wrong by anything from 6% to 100x.
+#
+# Versioned in the repo on purpose. When a definition changes, the diff shows
+# which certified reading changed and the eval can be re-run against both.
+
+version: 1
+updated: 2026-08-26
+
+columns:
+
+  # --- the three estimates -------------------------------------------------
+  budget_allocations.be_amount_crore:
+    means: >
+      Budget Estimate. The amount proposed when the budget was presented, in
+      February of the year it covers. This is what "the budget for X" usually
+      means in a headline, and it is the only one of the three that exists for
+      every year in the table.
+    unit: rupees crore
+    available: all years
+    gotcha: >
+      A Budget Estimate is a proposal, not spending. Quoting it as "spent" is
+      the most common error in budget journalism.
+
+  budget_allocations.re_amount_crore:
+    means: >
+      Revised Estimate. The mid-year correction, published with the following
+      year's budget. Closer to reality than BE, still not actual spending.
+    unit: rupees crore
+    available: all years except the most recent
+    gotcha: NULL for the latest year, because the revision has not happened yet.
+
+  budget_allocations.actual_amount_crore:
+    means: >
+      Actuals. What was really spent, available only after the accounts close,
+      which is roughly two years after the year begins.
+    unit: rupees crore
+    available: all years up to and including 2021-22
+    gotcha: >
+      NULL for the two most recent years. A question asking what was "actually
+      spent" in those years has no honest answer and must be refused, not
+      answered with BE.
+
+  # --- units: the 100x trap ------------------------------------------------
+  budget_allocations.be_amount_lakh:
+    means: The Budget Estimate expressed in lakh rather than crore.
+    unit: rupees lakh
+    equals: be_amount_crore * 100
+    gotcha: >
+      THE most dangerous column in the schema. Summing this instead of
+      be_amount_crore returns a figure exactly 100x too large. The query runs,
+      returns one row, and the number looks like a plausible budget total.
+      Nothing errors. Always report in crore unless the question says lakh.
+
+  budget_allocations.be_amount_rupees:
+    means: The Budget Estimate in rupees.
+    unit: rupees
+    equals: be_amount_crore * 10000000
+    gotcha: Same trap as be_amount_lakh, 10 million times over.
+
+  # --- gross vs net --------------------------------------------------------
+  budget_allocations.gross_amount_crore:
+    means: Expenditure before recoveries are netted off.
+    unit: rupees crore
+    gotcha: >
+      "Expenditure" in a question means gross unless the question says net.
+      The two differ by up to 6% here.
+
+  budget_allocations.net_amount_crore:
+    means: Gross expenditure minus recoveries.
+    unit: rupees crore
+    equals: gross_amount_crore - recoveries_crore
+
+  budget_allocations.recoveries_crore:
+    means: Amounts recovered and set against expenditure.
+    unit: rupees crore
+
+  # --- the 2017 discontinuity ----------------------------------------------
+  budget_allocations.plan_amount_crore:
+    means: >
+      Plan expenditure, under the classification in force until 2016-17. Plan
+      and Non-Plan were abolished from 2017-18 on the recommendation of the
+      Rangarajan committee and replaced by Scheme and Establishment.
+    unit: rupees crore
+    available: 2014-15 to 2016-17 ONLY
+    gotcha: >
+      NULL from 2017-18 onward. A query that sums this across all years
+      silently returns only the first three years, with no error and no NULL
+      in the output. It is the second most dangerous column here.
+
+  budget_allocations.non_plan_amount_crore:
+    means: Non-Plan expenditure, under the pre-2017-18 classification.
+    unit: rupees crore
+    available: 2014-15 to 2016-17 ONLY
+    gotcha: Same as plan_amount_crore.
+
+  budget_allocations.scheme_amount_crore:
+    means: >
+      Scheme expenditure, under the classification in force from 2017-18. The
+      nearest successor to Plan expenditure, but NOT equal to it -- the
+      boundary moved, so the two series are not comparable across 2017.
+    unit: rupees crore
+    available: 2017-18 onward ONLY
+    gotcha: >
+      NULL before 2017-18. Do not present a Plan-to-Scheme series as a
+      continuous trend; it is two different definitions.
+
+  budget_allocations.establishment_amount_crore:
+    means: Establishment expenditure, from 2017-18.
+    unit: rupees crore
+    available: 2017-18 onward ONLY
+
+  # --- entity granularity --------------------------------------------------
+  ministries.entity_kind:
+    means: >
+      What kind of spending entity a row is. The published Union Budget mixes
+      three kinds in one list, and they are not interchangeable.
+    values:
+      ministry: >
+        An administrative ministry, e.g. Ministry of Railways.
+      department: >
+        A department, e.g. Department of Higher Education. The published
+        budget is organised primarily by DEPARTMENT, not ministry -- there is
+        no "Ministry of Education" line, its money appears under Department of
+        School Education and Literacy and Department of Higher Education.
+      functional: >
+        A functional spending line that is not an administrative body at all:
+        Interest Payments, Defence Pensions, Transfers to States. Together
+        these are roughly 44% of total expenditure.
+    gotcha: >
+      "Total government expenditure" includes functional lines. "What
+      ministries spent" does not. The two differ by about 5x. Which one a
+      question means is a certified decision, never an assumption.
+
+  ministries.effective_from_year:
+    means: First fiscal year this entity appears in the budget.
+    gotcha: >
+      Entities are renamed and merged. Ministry of Human Resource Development
+      (to 2019-20) and Department of School Education and Literacy (from
+      2020-21) are the same money under different names. A query filtering on
+      one name gets a truncated series and reports a fall that did not happen.
+
+  ministries.renamed_from_id:
+    means: >
+      The predecessor entity, where this one is a rename or reorganisation of
+      an earlier one. Follow this to build a continuous multi-year series.
+
+  ministries.merged_into_id:
+    means: >
+      The successor entity, where this one was merged into another. Several
+      predecessors can point at one successor.
+
+  # --- receipts ------------------------------------------------------------
+  receipts.is_borrowing:
+    means: Whether this receipt line is borrowed money.
+    gotcha: >
+      Borrowings are a capital receipt. Including them in "government income"
+      or "total receipts" roughly doubles the figure and is the standard way
+      budget totals get misquoted. Revenue receipts exclude them.
+
+  receipts.devolution_to_states_crore:
+    means: >
+      The states' share of central taxes, transferred under the Finance
+      Commission formula. Collected by the centre but not available to it.
+    gotcha: >
+      Gross tax revenue includes devolution; the centre's usable receipts do
+      not. Around 41% of tax revenue in this period.
+
+  # --- grain ---------------------------------------------------------------
+  expenditure_actuals.expenditure_crore:
+    means: Monthly actual expenditure.
+    unit: rupees crore
+    grain: one row per month per allocation line
+    gotcha: >
+      This table is MONTHLY. budget_allocations is ANNUAL. Joining them
+      without aggregating first multiplies every annual figure by the number
+      of matching months -- measured at 42x on this data. Always aggregate
+      this table to the year before joining.

@@ -1,0 +1,519 @@
+# The gold evaluation set.
+#
+# ============================================================================
+#  REVIEW THIS FILE BEFORE QUOTING ANY NUMBER FROM THIS PROJECT.
+#
+#  Every judgement call here -- which reading of an ambiguous question counts
+#  as certified, which questions are refusals rather than answers -- determines
+#  every metric the project reports. These 16 ambiguous + 12 unanswerable
+#  categorizations have NOT been reviewed by a human. See
+#  eval/gold_audit_report.md section 2 for a structural note on the ambiguous
+#  set (six of the sixteen test the same underlying ambiguity restated).
+#
+#  The 32 gold_sql queries (answerable + trap) are more load-bearing: run
+#  `python scripts/audit_gold.py` for details. 32/32 independently verified
+#  against a different join path, an algebraic identity, or a known generation
+#  invariant -- not a second opinion in the same reasoning context, which is
+#  a materially weaker check. Full diagnostic trail in gold_audit_report.md.
+#  That audit does NOT touch the categorization judgement calls above; only a
+#  human review can.
+# ============================================================================
+#
+# Categories:
+#   answerable    exactly one certified reading -> the system should answer
+#   trap          answerable, but with a tempting wrong path that runs cleanly
+#   ambiguous     more than one certified reading -> the system should REFUSE
+#   unanswerable  no data exists -> the system should REFUSE, not return zero
+#
+# `expect` is what a correct system does. For answerable and trap questions
+# that is `answer` plus matching gold_sql; for the rest it is `refuse`.
+
+version: 1
+updated: 2026-08-26
+database: data/rosetta.duckdb
+
+questions:
+
+# ---------------------------------------------------------------------------
+# ANSWERABLE -- one certified reading
+# ---------------------------------------------------------------------------
+- id: Q01
+  category: answerable
+  expect: answer
+  question: What was the Budget Estimate for the Ministry of Railways in 2019-20?
+  gold_sql: |
+    SELECT SUM(a.be_amount_crore)
+    FROM budget_allocations a JOIN ministries m ON a.ministry_id = m.ministry_id
+    WHERE a.fiscal_year = '2019-20' AND m.ministry_name = 'Ministry of Railways'
+
+- id: Q02
+  category: answerable
+  expect: answer
+  question: What was the Budget Estimate for the Department of Higher Education in 2021-22?
+  gold_sql: |
+    SELECT SUM(a.be_amount_crore)
+    FROM budget_allocations a JOIN ministries m ON a.ministry_id = m.ministry_id
+    WHERE a.fiscal_year = '2021-22' AND m.ministry_name = 'Department of Higher Education'
+
+- id: Q03
+  category: answerable
+  expect: answer
+  question: How many distinct schemes are recorded as centrally sponsored?
+  gold_sql: |
+    SELECT COUNT(*) FROM schemes WHERE is_centrally_sponsored = TRUE
+
+- id: Q04
+  category: answerable
+  expect: answer
+  question: List the five entities with the largest Budget Estimate in 2022-23, with their amounts.
+  gold_sql: |
+    SELECT m.ministry_name, SUM(a.be_amount_crore) AS total_crore
+    FROM budget_allocations a JOIN ministries m ON a.ministry_id = m.ministry_id
+    WHERE a.fiscal_year = '2022-23'
+    GROUP BY 1 ORDER BY 2 DESC LIMIT 5
+
+- id: Q05
+  category: answerable
+  expect: answer
+  question: Which fiscal years used the Plan and Non-Plan classification?
+  gold_sql: |
+    SELECT fiscal_year FROM fiscal_years WHERE is_plan_regime = TRUE ORDER BY fiscal_year
+
+- id: Q06
+  category: answerable
+  expect: answer
+  question: What was the Revised Estimate for the Ministry of Cooperation in 2022-23?
+  gold_sql: |
+    SELECT SUM(a.re_amount_crore)
+    FROM budget_allocations a JOIN ministries m ON a.ministry_id = m.ministry_id
+    WHERE a.fiscal_year = '2022-23' AND m.ministry_name = 'Ministry of Cooperation'
+
+- id: Q07
+  category: answerable
+  expect: answer
+  question: How many union territories are in the states table?
+  gold_sql: |
+    SELECT COUNT(*) FROM states WHERE is_union_territory = TRUE
+
+- id: Q08
+  category: answerable
+  expect: answer
+  question: What was the actual expenditure for the Ministry of Railways in 2020-21?
+  gold_sql: |
+    SELECT SUM(a.actual_amount_crore)
+    FROM budget_allocations a JOIN ministries m ON a.ministry_id = m.ministry_id
+    WHERE a.fiscal_year = '2020-21' AND m.ministry_name = 'Ministry of Railways'
+
+- id: Q09
+  category: answerable
+  expect: answer
+  question: Which schemes were closed, and in which year?
+  gold_sql: |
+    SELECT scheme_name, closure_year FROM schemes
+    WHERE closure_year IS NOT NULL ORDER BY closure_year, scheme_name
+
+- id: Q10
+  category: answerable
+  expect: answer
+  question: How many allocation rows are there for fiscal year 2018-19?
+  gold_sql: |
+    SELECT COUNT(*) FROM budget_allocations WHERE fiscal_year = '2018-19'
+
+- id: Q11
+  category: answerable
+  expect: answer
+  question: What is the Budget Estimate for Jal Jeevan Mission in 2021-22?
+  gold_sql: |
+    SELECT SUM(a.be_amount_crore)
+    FROM budget_allocations a JOIN schemes s ON a.scheme_id = s.scheme_id
+    WHERE a.fiscal_year = '2021-22' AND s.scheme_name = 'Jal Jeevan Mission'
+
+- id: Q12
+  category: answerable
+  expect: answer
+  question: Which entities are classified as functional rather than administrative?
+  gold_sql: |
+    SELECT ministry_name FROM ministries WHERE entity_kind = 'functional'
+    ORDER BY ministry_name
+
+- id: Q13
+  category: answerable
+  expect: answer
+  question: What was the Budget Estimate for MGNREGA in 2020-21?
+  gold_sql: |
+    SELECT SUM(a.be_amount_crore)
+    FROM budget_allocations a JOIN schemes s ON a.scheme_id = s.scheme_id
+    WHERE a.fiscal_year = '2020-21'
+      AND (s.scheme_name = 'Mahatma Gandhi National Rural Employment Guarantee Scheme'
+           OR s.scheme_name_alt = 'MGNREGA')
+
+- id: Q14
+  category: answerable
+  expect: answer
+  question: How many ministries were active in 2016-17?
+  gold_sql: |
+    SELECT COUNT(*) FROM ministries
+    WHERE effective_from_year <= 2016
+      AND (effective_to_year IS NULL OR effective_to_year >= 2016)
+
+- id: Q15
+  category: answerable
+  expect: answer
+  question: Which states are marked as special category?
+  gold_sql: |
+    SELECT state_name FROM states WHERE is_special_category = TRUE ORDER BY state_name
+
+- id: Q16
+  category: answerable
+  expect: answer
+  question: What is the total Budget Estimate for tax receipts in 2020-21?
+  gold_sql: |
+    SELECT SUM(be_amount_crore) FROM receipts
+    WHERE fiscal_year = '2020-21' AND receipt_type = 'tax'
+
+- id: Q17
+  category: answerable
+  expect: answer
+  question: Break down actual expenditure by month for 2019-20.
+  gold_sql: |
+    SELECT month_no, month_name, SUM(expenditure_crore) AS total_crore
+    FROM expenditure_actuals WHERE fiscal_year = '2019-20'
+    GROUP BY 1, 2 ORDER BY 1
+
+- id: Q18
+  category: answerable
+  expect: answer
+  question: How many account heads are classified as capital?
+  gold_sql: |
+    SELECT COUNT(*) FROM account_heads WHERE account_type = 'capital'
+
+- id: Q19
+  category: answerable
+  expect: answer
+  question: Which ministry had the largest Budget Estimate in 2015-16?
+  gold_sql: |
+    SELECT m.ministry_name, SUM(a.be_amount_crore) AS total_crore
+    FROM budget_allocations a JOIN ministries m ON a.ministry_id = m.ministry_id
+    WHERE a.fiscal_year = '2015-16'
+    GROUP BY 1 ORDER BY 2 DESC LIMIT 1
+
+- id: Q20
+  category: answerable
+  expect: answer
+  question: What was the Budget Estimate for transfers to Bihar in 2021-22?
+  gold_sql: |
+    SELECT SUM(t.be_amount_crore)
+    FROM transfers_to_states t JOIN states s ON t.state_code = s.state_code
+    WHERE t.fiscal_year = '2021-22' AND s.state_name = 'Bihar'
+
+# ---------------------------------------------------------------------------
+# TRAP -- answerable, but a tempting wrong path runs cleanly
+# ---------------------------------------------------------------------------
+- id: T01
+  category: trap
+  trap: units
+  expect: answer
+  question: What was the total Budget Estimate across all spending in 2023-24, in crore?
+  gold_sql: |
+    SELECT SUM(be_amount_crore) FROM budget_allocations WHERE fiscal_year = '2023-24'
+  wrong_path: SUM(be_amount_lakh) -- runs cleanly, returns exactly 100x
+
+- id: T02
+  category: trap
+  trap: units
+  expect: answer
+  question: Give the Budget Estimate for the Ministry of Railways in 2018-19 in rupees crore.
+  gold_sql: |
+    SELECT SUM(a.be_amount_crore)
+    FROM budget_allocations a JOIN ministries m ON a.ministry_id = m.ministry_id
+    WHERE a.fiscal_year = '2018-19' AND m.ministry_name = 'Ministry of Railways'
+  wrong_path: be_amount_rupees -- 10,000,000x out
+
+- id: T03
+  category: trap
+  trap: plan_era
+  expect: answer
+  question: What was Plan expenditure in 2016-17?
+  gold_sql: |
+    SELECT SUM(plan_amount_crore) FROM budget_allocations WHERE fiscal_year = '2016-17'
+  wrong_path: none for this year -- the trap is the adjacent question U01
+
+- id: T04
+  category: trap
+  trap: fan_out
+  expect: answer
+  question: For 2019-20, give each ministry's Budget Estimate alongside its total actual expenditure from the monthly table.
+  gold_sql: |
+    WITH monthly AS (
+      SELECT fiscal_year, ministry_id, SUM(expenditure_crore) AS actual_crore
+      FROM expenditure_actuals WHERE fiscal_year = '2019-20'
+      GROUP BY 1, 2
+    )
+    SELECT m.ministry_name,
+           SUM(a.be_amount_crore) AS be_crore,
+           MAX(mo.actual_crore)   AS actual_crore
+    FROM budget_allocations a
+    JOIN ministries m ON a.ministry_id = m.ministry_id
+    LEFT JOIN monthly mo ON mo.ministry_id = a.ministry_id
+                        AND mo.fiscal_year = a.fiscal_year
+    WHERE a.fiscal_year = '2019-20'
+    GROUP BY 1 ORDER BY 2 DESC
+  wrong_path: direct join to expenditure_actuals -- inflates the BE column ~42x
+
+- id: T05
+  category: trap
+  trap: entity_scope
+  expect: answer
+  question: What did administrative ministries and departments spend in 2022-23 on a Budget Estimate basis, excluding functional lines?
+  gold_sql: |
+    SELECT SUM(a.be_amount_crore)
+    FROM budget_allocations a JOIN ministries m ON a.ministry_id = m.ministry_id
+    WHERE a.fiscal_year = '2022-23' AND m.entity_kind IN ('ministry','department')
+  wrong_path: no entity_kind filter -- includes Interest Payments etc, ~1.8x larger
+
+- id: T06
+  category: trap
+  trap: rename
+  expect: answer
+  question: Give the Budget Estimate for education spending in each year from 2014-15 to 2022-23, following the Ministry of Human Resource Development through its rename to the Department of School Education and Literacy.
+  gold_sql: |
+    SELECT a.fiscal_year, SUM(a.be_amount_crore) AS total_crore
+    FROM budget_allocations a JOIN ministries m ON a.ministry_id = m.ministry_id
+    WHERE m.ministry_name IN (
+        'Ministry of Human Resource Development',
+        'Department of School Education and Literacy')
+    GROUP BY 1 ORDER BY 1
+  wrong_path: filtering one name only -- series stops dead at the rename
+
+- id: T07
+  category: trap
+  trap: gross_net
+  expect: answer
+  question: What was the gross Budget Estimate in 2020-21, before recoveries?
+  gold_sql: |
+    SELECT SUM(gross_amount_crore) FROM budget_allocations WHERE fiscal_year = '2020-21'
+  wrong_path: net_amount_crore -- up to 6% lower
+
+- id: T08
+  category: trap
+  trap: borrowings
+  expect: answer
+  question: What were revenue receipts, excluding borrowings, on a Budget Estimate basis in 2021-22?
+  gold_sql: |
+    SELECT SUM(be_amount_crore) FROM receipts
+    WHERE fiscal_year = '2021-22' AND is_revenue_receipt = TRUE
+  wrong_path: summing all receipts -- includes borrowings, roughly doubles it
+
+- id: T09
+  category: trap
+  trap: devolution
+  expect: answer
+  question: How much tax revenue was actually available to the centre in 2020-21 after devolution to states?
+  gold_sql: |
+    SELECT SUM(net_to_centre_crore) FROM receipts
+    WHERE fiscal_year = '2020-21' AND receipt_type = 'tax'
+  wrong_path: gross_amount_crore -- ~41% too high
+
+- id: T10
+  category: trap
+  trap: null_join
+  expect: answer
+  question: What is the total Budget Estimate for 2021-22 counting all allocations, including those not tied to any state?
+  gold_sql: |
+    SELECT SUM(be_amount_crore) FROM budget_allocations WHERE fiscal_year = '2021-22'
+  wrong_path: INNER JOIN to states -- silently drops ~72% of rows where state_code IS NULL
+
+- id: T11
+  category: trap
+  trap: scheme_merge
+  expect: answer
+  question: What was the Budget Estimate for Sarva Shiksha Abhiyan in 2016-17?
+  gold_sql: |
+    SELECT SUM(a.be_amount_crore)
+    FROM budget_allocations a JOIN schemes s ON a.scheme_id = s.scheme_id
+    WHERE a.fiscal_year = '2016-17' AND s.scheme_name = 'Sarva Shiksha Abhiyan'
+  wrong_path: including Samagra Shiksha, which did not exist until 2018-19
+
+- id: T12
+  category: trap
+  trap: estimate_basis
+  expect: answer
+  question: Compare Budget Estimate against Revised Estimate for the Ministry of Railways in 2019-20.
+  gold_sql: |
+    SELECT SUM(a.be_amount_crore) AS be_crore, SUM(a.re_amount_crore) AS re_crore
+    FROM budget_allocations a JOIN ministries m ON a.ministry_id = m.ministry_id
+    WHERE a.fiscal_year = '2019-20' AND m.ministry_name = 'Ministry of Railways'
+
+# ---------------------------------------------------------------------------
+# AMBIGUOUS -- more than one certified reading, must refuse
+# ---------------------------------------------------------------------------
+- id: A01
+  category: ambiguous
+  expect: refuse
+  question: How much did the government spend in 2019-20?
+  why: estimate basis not pinned, and entity scope not pinned
+
+- id: A02
+  category: ambiguous
+  expect: refuse
+  question: What is the budget for the Ministry of Railways in 2020-21?
+  why: '"budget" could mean Budget Estimate, Revised Estimate or Actuals'
+
+- id: A03
+  category: ambiguous
+  expect: refuse
+  question: How much was allocated to Swachh Bharat in 2019-20?
+  why: matches both Swachh Bharat Mission Gramin and Urban
+
+- id: A04
+  category: ambiguous
+  expect: refuse
+  question: What was total expenditure in 2021-22?
+  why: estimate basis and entity scope both unpinned
+
+- id: A05
+  category: ambiguous
+  expect: refuse
+  question: How much went to PMAY in 2020-21?
+  why: PMAY matches both Gramin and Urban
+
+- id: A06
+  category: ambiguous
+  expect: refuse
+  question: What did we spend on education each year since 2014?
+  why: entity was renamed mid-series; estimate basis unpinned
+
+- id: A07
+  category: ambiguous
+  expect: refuse
+  question: How much money went to Pradhan Mantri Awaas Yojana in 2021-22?
+  why: matches both Gramin and Urban
+
+- id: A08
+  category: ambiguous
+  expect: refuse
+  question: What was the overall budget in 2018-19?
+  why: estimate basis and entity scope unpinned
+
+- id: A09
+  category: ambiguous
+  expect: refuse
+  question: How much did the Ministry of Railways get in 2017-18?
+  why: estimate basis unpinned
+
+- id: A10
+  category: ambiguous
+  expect: refuse
+  question: What was government revenue in 2020-21?
+  why: revenue receipts only, or total receipts including borrowings?
+
+- id: A11
+  category: ambiguous
+  expect: refuse
+  question: Show total spending across all years.
+  why: estimate basis and entity scope unpinned
+
+- id: A12
+  category: ambiguous
+  expect: refuse
+  question: How much was spent on water ministry programmes over time?
+  why: entity renamed mid-series; estimate basis unpinned
+
+- id: A13
+  category: ambiguous
+  expect: refuse
+  question: What is the allocation for Swachh Bharat Mission across 2018-19 and 2019-20?
+  why: matches Gramin and Urban; estimate basis unpinned
+
+- id: A14
+  category: ambiguous
+  expect: refuse
+  question: How much did the centre spend on rural development in 2020-21?
+  why: estimate basis unpinned
+
+- id: A15
+  category: ambiguous
+  expect: refuse
+  question: What was the entire budget for 2016-17?
+  why: estimate basis and entity scope unpinned
+
+- id: A16
+  category: ambiguous
+  expect: refuse
+  question: Tell me the total outlay in 2015-16.
+  why: estimate basis and entity scope unpinned
+
+# ---------------------------------------------------------------------------
+# UNANSWERABLE -- no data exists; refuse, do not return zero
+# ---------------------------------------------------------------------------
+- id: U01
+  category: unanswerable
+  expect: refuse
+  question: What was Plan expenditure in 2019-20?
+  why: Plan/Non-Plan abolished from 2017-18; the figure does not exist
+
+- id: U02
+  category: unanswerable
+  expect: refuse
+  question: What was Plan expenditure in 2021-22?
+  why: outside the Plan era
+
+- id: U03
+  category: unanswerable
+  expect: refuse
+  question: What was actually spent in 2023-24?
+  why: actuals are not published until roughly two years after year end
+
+- id: U04
+  category: unanswerable
+  expect: refuse
+  question: How much did the Ministry of Railways actually spend in 2022-23?
+  why: actuals not available for 2022-23
+
+- id: U05
+  category: unanswerable
+  expect: refuse
+  question: What were the actuals for education in 2023-24?
+  why: actuals not available for 2023-24
+
+- id: U06
+  category: unanswerable
+  expect: refuse
+  question: Give me the Revised Estimate for 2023-24.
+  why: RE is published with the following year's budget; not available yet
+
+- id: U07
+  category: unanswerable
+  expect: refuse
+  question: What was Plan outlay in 2018-19?
+  why: outside the Plan era
+
+- id: U08
+  category: unanswerable
+  expect: refuse
+  question: How much was actually spent on MGNREGA in 2023-24?
+  why: actuals not available for 2023-24
+
+- id: U09
+  category: unanswerable
+  expect: refuse
+  question: What was non-plan spending in 2020-21?
+  why: Non-Plan classification abolished from 2017-18
+
+- id: U10
+  category: unanswerable
+  expect: refuse
+  question: Show me actual expenditure by ministry for 2022-23.
+  why: actuals not available for 2022-23
+
+- id: U11
+  category: unanswerable
+  expect: refuse
+  question: What was Plan expenditure in 2022-23?
+  why: outside the Plan era
+
+- id: U12
+  category: unanswerable
+  expect: refuse
+  question: Give the revised estimate for the Ministry of Cooperation in 2023-24.
+  why: RE not available for the most recent year

@@ -1,0 +1,171 @@
+# Validated join paths.
+#
+# This is the tribal knowledge, written down. In a real warehouse it lives in
+# the heads of three analysts and nowhere else, which is why text-to-SQL that
+# works on a benchmark falls over on a warehouse: the model has no way to know
+# that two tables which *can* be joined *must not* be, or that two paths
+# between the same pair of tables give different answers.
+#
+# Three categories:
+#   certified  - use freely, the answer is correct
+#   ambiguous  - more than one defensible path; must be pinned, never guessed
+#   forbidden  - joins that produce a plausible wrong number; refuse or rewrite
+
+version: 1
+updated: 2026-08-26
+
+certified:
+
+  - id: allocations_to_ministry
+    from: budget_allocations
+    to: ministries
+    on: "budget_allocations.ministry_id = ministries.ministry_id"
+    grain_preserved: true
+    note: >
+      The certified path from an allocation to its spending entity. Direct,
+      one-to-one, no fan-out.
+
+  - id: allocations_to_scheme
+    from: budget_allocations
+    to: schemes
+    on: "budget_allocations.scheme_id = schemes.scheme_id"
+    grain_preserved: true
+
+  - id: allocations_to_head
+    from: budget_allocations
+    to: account_heads
+    on: "budget_allocations.head_code = account_heads.head_code"
+    grain_preserved: true
+
+  - id: allocations_to_state
+    from: budget_allocations
+    to: states
+    on: "budget_allocations.state_code = states.state_code"
+    grain_preserved: true
+    note: >
+      state_code is NULL on roughly 72% of allocation rows, because most
+      spending is not a state transfer. An INNER join therefore silently drops
+      most of the budget. Use LEFT unless the question is specifically about
+      state transfers.
+
+  - id: allocations_to_year
+    from: budget_allocations
+    to: fiscal_years
+    on: "budget_allocations.fiscal_year = fiscal_years.fiscal_year"
+    grain_preserved: true
+    note: >
+      Join here to check actuals_available before answering any question about
+      actual spending. This is the cheapest way to catch an unanswerable
+      question before generating a number for it.
+
+  - id: transfers_to_state
+    from: transfers_to_states
+    to: states
+    on: "transfers_to_states.state_code = states.state_code"
+    grain_preserved: true
+
+  - id: demands_to_ministry
+    from: demands
+    to: ministries
+    on: "demands.ministry_id = ministries.ministry_id"
+    grain_preserved: true
+
+ambiguous:
+
+  - id: allocation_to_ministry_two_paths
+    paths:
+      - id: direct
+        sql: "budget_allocations.ministry_id = ministries.ministry_id"
+        certified: true
+      - id: via_demand
+        sql: >
+          budget_allocations.demand_id = demands.demand_id AND
+          demands.ministry_id = ministries.ministry_id
+        certified: false
+    why_they_differ: >
+      Both paths reach a ministry from an allocation, and they agree in most
+      rows. They disagree wherever a demand was reassigned between ministries
+      during a reorganisation, because the allocation keeps the ministry it
+      was booked under while the demand carries the ministry that owns it in
+      that year.
+    resolution: >
+      Use the direct path. It is the booking of record. The via_demand path is
+      not wrong, it answers a different question -- "which ministry owned the
+      demand" rather than "which ministry the money was booked to" -- and a
+      question that genuinely wants the second must say so.
+
+  - id: entity_across_a_rename
+    why_they_differ: >
+      An entity renamed mid-series has two ministry_id values. Filtering on
+      one name gives a truncated series; the chart shows the spending stopping
+      dead in the year of the rename.
+    affected:
+      - Ministry of Human Resource Development -> Department of School Education and Literacy (2020-21)
+      - Ministry of Water Resources -> Department of Water Resources, River Development and Ganga Rejuvenation (2019-20)
+      - Ministry of Urban Development + Ministry of Housing and Urban Poverty Alleviation -> Ministry of Housing and Urban Affairs (2017-18)
+      - Ministry of Agriculture -> Department of Agriculture and Farmers Welfare (2015-16)
+    resolution: >
+      Walk ministries.renamed_from_id and ministries.merged_into_id to collect
+      the full lineage, then filter on the set of ids. Implemented as
+      resolve_lineage() in src/rosetta/semantic.py.
+
+forbidden:
+
+  - id: allocations_x_actuals_unaggregated
+    from: budget_allocations
+    to: expenditure_actuals
+    naive_sql: >
+      budget_allocations.ministry_id = expenditure_actuals.ministry_id AND
+      budget_allocations.fiscal_year = expenditure_actuals.fiscal_year
+    why_forbidden: >
+      budget_allocations is annual, one row per allocation line.
+      expenditure_actuals is monthly, twelve rows per allocation line that has
+      actuals. Joining them directly fans every annual figure out across every
+      matching monthly row. Measured at 42x inflation on this database.
+      The query runs, returns one row, and the number is catastrophically
+      wrong in a way that looks like a big budget.
+    rewrite: |
+      WITH monthly AS (
+        SELECT fiscal_year, ministry_id, SUM(expenditure_crore) AS actual_crore
+        FROM expenditure_actuals
+        GROUP BY 1, 2
+      )
+      SELECT a.fiscal_year, SUM(a.be_amount_crore) AS be_crore, MAX(m.actual_crore) AS actual_crore
+      FROM budget_allocations a
+      LEFT JOIN monthly m
+        ON a.ministry_id = m.ministry_id AND a.fiscal_year = m.fiscal_year
+      GROUP BY 1
+    note: Aggregate the monthly table to the year FIRST, then join. Always.
+
+  - id: sum_over_mixed_granularity
+    why_forbidden: >
+      The ministries table mixes administrative entities with functional
+      spending lines (Interest Payments, Defence Pensions, Transfers to
+      States). Summing across all of them answers "total expenditure";
+      summing only ministries answers something five times smaller. Neither is
+      wrong, but a query that does not filter entity_kind has not decided
+      which question it is answering.
+    resolution: Pin entity_scope. See metrics.yaml.
+
+  - id: plan_series_across_2017
+    why_forbidden: >
+      plan_amount_crore is NULL from 2017-18. A SUM across all years returns
+      only 2014-15 to 2016-17 with no error, no warning and no NULL in the
+      output -- it simply reports three years of data as if it were ten.
+    resolution: >
+      Refuse a Plan expenditure question outside 2014-15 to 2016-17. Do not
+      substitute scheme_amount_crore; the classification boundary moved and
+      the two series are not comparable.
+
+  - id: naive_total_over_reference_rows
+    why_forbidden: >
+      The published reference file this database is anchored to includes a
+      'Grand Total' row alongside the components that make it up. Any
+      aggregate that treats the source rows as uniformly summable
+      double-counts, returning exactly 2x the true figure. The database
+      excludes the aggregate row from budget_allocations for this reason, but
+      the trap is documented here because it is the single most common error
+      made against the published data itself.
+    evidence: >
+      Sum of all reference rows: 9,531,537 crore.
+      True grand total: 4,765,768 crore.

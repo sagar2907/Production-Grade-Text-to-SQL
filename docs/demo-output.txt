@@ -1,0 +1,47 @@
+==========================================================================
+  ROSETTA -- the same question, the same model, twice
+==========================================================================
+
+  Question: How much did the government spend in 2019-20?
+  Model:    ollama:qwen2.5-coder:7b
+
+==========================================================================
+  WITHOUT the semantic layer
+==========================================================================
+  SQL:
+    SELECT SUM(expenditure_crore) AS total_expenditure FROM expenditure_actuals WHERE fiscal_year = '2019-20'
+
+  Result:
+    666,197
+
+  No caveat. No question asked. The user has no way to know
+  which of the three estimate bases this is, or whether it
+  includes Interest Payments.
+
+==========================================================================
+  WITH the semantic layer
+==========================================================================
+  That question has more than one defensible answer here.
+
+    Which figure do you mean?
+      - Budget Estimate - what was proposed when the budget was presented
+      - Revised Estimate - the mid-year correction
+      - Actuals - what was really spent (available to 2021-22 only)
+      (these are three different numbers, routinely 10-20% apart)
+
+==========================================================================
+  What the certified readings actually return
+==========================================================================
+  Budget Estimate, all spending                             2,905,387
+  Budget Estimate, ministries and departments only          1,636,754
+  Revised Estimate, all spending                            2,872,216
+  Actuals, all spending                                     2,643,743
+
+  4 defensible answers to one question, spanning a 1.8x range.
+  Picking one silently is the failure this project measures.
+
+  Note: the baseline answered 666,197, which is not any of these.
+  Its nearest certified reading is 1,636,754 (Budget Estimate, ministries and departments only),
+  which it is off by 59%.
+  It did not pick the wrong reading. It produced a fifth number,
+  with no indication that it had.

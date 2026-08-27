@@ -1,0 +1,4 @@
+duckdb>=1.5
+sqlglot>=30.0
+pandas>=2.0
+pyyaml>=6.0

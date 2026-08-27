@@ -1,0 +1,273 @@
+# Certified metric definitions.
+#
+# The rule this file enforces: a metric with more than one certified reading,
+# asked without enough information to pick one, is a REFUSAL. Not a guess, not
+# a default, not "most people mean BE". Refusing costs the user one extra
+# question; guessing costs them a wrong number they will not notice.
+#
+# Each metric declares the dimensions that must be pinned before it can be
+# computed. A question that pins them gets SQL. A question that does not gets
+# asked back, with the specific options listed.
+#
+# Every `expression` here has been executed against the database and its result
+# recorded in eval/questions.yaml. None of them are aspirational.
+
+version: 1
+updated: 2026-08-26
+
+# ---------------------------------------------------------------------------
+# Dimensions: the axes along which a question can be under-specified.
+# ---------------------------------------------------------------------------
+dimensions:
+
+  estimate_basis:
+    question: "Budget Estimate, Revised Estimate, or Actuals?"
+    why: >
+      These are three different numbers for the same year and they routinely
+      differ by 10-20%. The word "budget" alone does not pick one.
+    options:
+      be:
+        label: Budget Estimate
+        column: be_amount_crore
+        available_years: all
+      re:
+        label: Revised Estimate
+        column: re_amount_crore
+        available_years: all except the most recent
+      actual:
+        label: Actuals
+        column: actual_amount_crore
+        available_years: up to 2021-22 only
+    # If a question names a year with no data on the chosen basis, that is an
+    # unanswerable question, not a zero.
+    hard_fail_when_unavailable: true
+
+  entity_scope:
+    question: "All spending, or only administrative ministries and departments?"
+    why: >
+      Interest Payments, Defence Pensions and Transfers to States are real
+      spending lines in the published budget but are not administrative
+      bodies. They are about 44% of the total. Including or excluding them
+      changes the answer roughly fivefold.
+    options:
+      all:
+        label: All spending including functional lines
+        filter: null
+      administrative:
+        label: Ministries and departments only
+        filter: "m.entity_kind IN ('ministry','department')"
+      ministries_only:
+        label: Entities named as ministries only
+        filter: "m.entity_kind = 'ministry'"
+
+  gross_net:
+    question: "Gross, or net of recoveries?"
+    why: Gross and net differ by up to 6%.
+    default: gross
+    # Unlike the other two this one HAS a certified default, because "expenditure"
+    # unqualified conventionally means gross in budget documents.
+    options:
+      gross: {label: Gross, column: gross_amount_crore}
+      net: {label: Net of recoveries, column: net_amount_crore}
+
+  receipts_borrowings:
+    question: "Including borrowings, or revenue receipts only?"
+    why: >
+      Borrowings are a capital receipt. Including them roughly doubles the
+      figure. "Government income" almost never means to include them, but the
+      published "total receipts" does.
+    options:
+      revenue_only:
+        label: Revenue receipts only
+        filter: "is_revenue_receipt = TRUE"
+      including_borrowings:
+        label: Total receipts including borrowings
+        filter: null
+
+# ---------------------------------------------------------------------------
+# Metrics
+# ---------------------------------------------------------------------------
+metrics:
+
+  - id: total_expenditure
+    label: total expenditure
+    aliases:
+      - total spending
+      - government spending
+      - overall expenditure
+      - how much was spent
+      - budget size
+    base_table: budget_allocations
+    requires: [estimate_basis, entity_scope]
+    unit: rupees crore
+    sql_template: |
+      SELECT SUM(a.{estimate_column}) AS total_crore
+      FROM budget_allocations a
+      JOIN ministries m ON a.ministry_id = m.ministry_id
+      WHERE a.fiscal_year = '{fiscal_year}'
+        {entity_filter}
+    notes: >
+      Never sum be_amount_lakh or be_amount_rupees here. Report crore.
+
+  - id: entity_expenditure
+    label: expenditure by a named ministry or department
+    aliases:
+      - how much did X get
+      - X's budget
+      - allocation to X
+    base_table: budget_allocations
+    requires: [estimate_basis]
+    unit: rupees crore
+    sql_template: |
+      SELECT SUM(a.{estimate_column}) AS total_crore
+      FROM budget_allocations a
+      JOIN ministries m ON a.ministry_id = m.ministry_id
+      WHERE a.fiscal_year = '{fiscal_year}'
+        AND m.ministry_name = '{entity_name}'
+    notes: >
+      Resolve the entity name against the year first. An entity that was
+      renamed has different names in different years, and filtering on one
+      name across a multi-year range silently truncates the series. Use
+      certified_series below for anything spanning a rename.
+
+  - id: entity_series
+    label: a named entity's spending across years, following renames
+    aliases:
+      - trend for X
+      - X over time
+      - how has X changed
+    base_table: budget_allocations
+    requires: [estimate_basis]
+    unit: rupees crore
+    sql_template: |
+      WITH RECURSIVE lineage AS (
+        SELECT ministry_id, ministry_name FROM ministries
+        WHERE ministry_name = '{entity_name}'
+        UNION ALL
+        SELECT m.ministry_id, m.ministry_name
+        FROM ministries m JOIN lineage l
+          ON m.ministry_id = l.ministry_id_predecessor_placeholder
+      )
+      SELECT a.fiscal_year, SUM(a.{estimate_column}) AS total_crore
+      FROM budget_allocations a
+      WHERE a.ministry_id IN (SELECT ministry_id FROM lineage)
+      GROUP BY 1 ORDER BY 1
+    notes: >
+      The lineage walk is what makes a multi-year series honest. Without it,
+      "education spending since 2014" returns NULL for 2014-2019 because the
+      entity was called something else, and the chart shows a cliff that never
+      happened.
+    status: draft
+    warning: >
+      The recursive template above is illustrative. The implemented version
+      lives in src/rosetta/semantic.py resolve_lineage(), which is tested.
+
+  - id: scheme_expenditure
+    label: spending on a named scheme
+    aliases:
+      - how much for scheme X
+      - allocation to X scheme
+    base_table: budget_allocations
+    requires: [estimate_basis]
+    unit: rupees crore
+    sql_template: |
+      SELECT SUM(a.{estimate_column}) AS total_crore
+      FROM budget_allocations a
+      JOIN schemes s ON a.scheme_id = s.scheme_id
+      WHERE a.fiscal_year = '{fiscal_year}'
+        AND (s.scheme_name = '{scheme_name}' OR s.scheme_name_alt = '{scheme_name}')
+    notes: >
+      Scheme names are not unique in common speech. "Swachh Bharat" matches
+      two certified schemes, Gramin and Urban, which are different money under
+      different ministries. That is an ambiguity, not a sum.
+    ambiguous_names:
+      "Swachh Bharat":
+        - Swachh Bharat Mission - Gramin
+        - Swachh Bharat Mission - Urban
+      "Pradhan Mantri Awaas Yojana":
+        - Pradhan Mantri Awaas Yojana - Gramin
+        - Pradhan Mantri Awaas Yojana - Urban
+      "PMAY":
+        - Pradhan Mantri Awaas Yojana - Gramin
+        - Pradhan Mantri Awaas Yojana - Urban
+
+  - id: plan_expenditure
+    label: Plan expenditure
+    aliases: [plan spending, plan outlay]
+    base_table: budget_allocations
+    requires: []
+    unit: rupees crore
+    era_bound:
+      valid_from: "2014-15"
+      valid_to: "2016-17"
+      reason: >
+        Plan/Non-Plan was abolished from 2017-18. There is no Plan expenditure
+        after 2016-17 -- not zero, but undefined.
+      after_era: refuse
+      nearest_successor: scheme_expenditure_classification
+    sql_template: |
+      SELECT SUM(a.plan_amount_crore) AS total_crore
+      FROM budget_allocations a
+      WHERE a.fiscal_year = '{fiscal_year}'
+    notes: >
+      A question asking for Plan expenditure in 2019-20 must be refused with
+      an explanation, not answered with 0 and not silently mapped to Scheme
+      expenditure. Scheme is the successor classification but the boundary
+      moved, so the two are not comparable.
+
+  - id: total_receipts
+    label: total receipts
+    aliases: [government income, revenue, total revenue, receipts]
+    base_table: receipts
+    requires: [estimate_basis, receipts_borrowings]
+    unit: rupees crore
+    sql_template: |
+      SELECT SUM(r.{estimate_column}) AS total_crore
+      FROM receipts r
+      WHERE r.fiscal_year = '{fiscal_year}'
+        {borrowings_filter}
+
+  - id: tax_revenue_centre
+    label: tax revenue available to the centre
+    aliases: [net tax revenue, centre's tax revenue]
+    base_table: receipts
+    requires: [estimate_basis]
+    unit: rupees crore
+    sql_template: |
+      SELECT SUM(r.net_to_centre_crore) AS total_crore
+      FROM receipts r
+      WHERE r.fiscal_year = '{fiscal_year}' AND r.receipt_type = 'tax'
+    notes: >
+      Gross tax revenue includes the states' devolution share, roughly 41%.
+      "Tax revenue" in a question about what the centre has to spend means
+      net_to_centre_crore, not gross_amount_crore.
+
+  - id: state_transfers
+    label: transfers to a state
+    aliases: [money sent to X, allocation for state X]
+    base_table: transfers_to_states
+    requires: [estimate_basis]
+    unit: rupees crore
+    sql_template: |
+      SELECT SUM(t.{estimate_column}) AS total_crore
+      FROM transfers_to_states t
+      JOIN states s ON t.state_code = s.state_code
+      WHERE t.fiscal_year = '{fiscal_year}' AND s.state_name = '{state_name}'
+    notes: >
+      Jammu and Kashmir was a state until 2019-20 and two union territories
+      after. A question spanning that boundary needs the reading pinned.
+
+  - id: monthly_expenditure
+    label: monthly actual expenditure
+    aliases: [spending by month, monthly spend]
+    base_table: expenditure_actuals
+    requires: []
+    unit: rupees crore
+    sql_template: |
+      SELECT e.month_no, e.month_name, SUM(e.expenditure_crore) AS total_crore
+      FROM expenditure_actuals e
+      WHERE e.fiscal_year = '{fiscal_year}'
+      GROUP BY 1, 2 ORDER BY 1
+    notes: >
+      Never join this table to budget_allocations without aggregating to the
+      year first. See joins.yaml -- the un-aggregated join inflates by 42x.
