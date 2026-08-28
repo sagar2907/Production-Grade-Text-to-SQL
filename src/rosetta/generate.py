@@ -147,6 +147,9 @@ def build_prompt(
 # ---------------------------------------------------------------------------
 _FENCE = re.compile(r"```(?:sql)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 _LEADING_LABEL = re.compile(r"^\s*(sql|query|answer)\s*:\s*", re.IGNORECASE)
+# A statement keyword only counts at the start of a line. Anywhere else it is
+# probably the English word "with".
+_STATEMENT_START = re.compile(r"^[ \t]*(WITH|SELECT)\b", re.IGNORECASE | re.MULTILINE)
 
 
 def extract_sql(raw: str) -> str:
@@ -167,10 +170,20 @@ def extract_sql(raw: str) -> str:
 
     text = _LEADING_LABEL.sub("", text).strip()
 
-    # Cut anything before the first statement keyword.
-    match = re.search(r"\b(WITH|SELECT)\b", text, re.IGNORECASE)
-    if match:
-        text = text[match.start():]
+    # Cut anything before the first statement keyword. If there is no keyword
+    # the response contained no SQL, and returning the prose verbatim would
+    # send "Sorry, I cannot help with that" to the database as a query. The
+    # repair loop handles an empty string properly -- it asks again for a
+    # SELECT -- whereas a parse error on prose sends it chasing a syntax
+    # problem that does not exist.
+    #
+    # The keyword must begin a line. A plain \b match also fires on the
+    # ordinary English "with", so "Sorry, I cannot help with that" was being
+    # truncated to "with that." and passed on as though it were SQL.
+    match = _STATEMENT_START.search(text)
+    if not match:
+        return ""
+    text = text[match.start(1):]
 
     # Cut at the first semicolon: one statement only.
     if ";" in text:

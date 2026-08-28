@@ -257,12 +257,47 @@ def gold_requires_order(sql: str) -> bool:
     result, so only a trailing ORDER BY on the outermost query counts. When in
     doubt this returns False, which is the lenient direction for row order and
     the strict direction for row values.
+
+    String literals are blanked first. Without that, `SELECT 'ORDER BY x'`
+    was read as a real ORDER BY and the comparison then demanded a row order
+    the query never asked for -- turning a correct answer into a reported
+    failure.
     """
-    lowered = " ".join(sql.lower().split())
+    lowered = " ".join(_blank_string_literals(sql).lower().split())
     idx = lowered.rfind("order by")
     if idx == -1:
         return False
     # An ORDER BY that still has an unclosed paren before it belongs to a
-    # subquery, not the outer statement.
+    # subquery or a window function, not the outer statement.
     prefix = lowered[:idx]
     return prefix.count("(") == prefix.count(")")
+
+
+def _blank_string_literals(sql: str) -> str:
+    """Replace the contents of single-quoted literals with spaces.
+
+    Keeps every character position and both quote marks, so paren balancing
+    downstream is unaffected. Handles the SQL '' escape for an embedded quote.
+    """
+    out: list[str] = []
+    inside = False
+    i, n = 0, len(sql)
+    while i < n:
+        ch = sql[i]
+        if not inside:
+            out.append(ch)
+            if ch == "'":
+                inside = True
+        else:
+            if ch == "'":
+                # '' inside a literal is an escaped quote, not the end of it.
+                if i + 1 < n and sql[i + 1] == "'":
+                    out.append("  ")
+                    i += 2
+                    continue
+                out.append(ch)
+                inside = False
+            else:
+                out.append(" ")
+        i += 1
+    return "".join(out)

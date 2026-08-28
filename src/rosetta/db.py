@@ -18,11 +18,12 @@ them apart here is what makes the confidently-wrong rate measurable at all.
 
 from __future__ import annotations
 
+import re
 import threading
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import duckdb
 import sqlglot
@@ -33,6 +34,56 @@ DEFAULT_TIMEOUT_SECONDS = 30.0
 # Statement types allowed to reach the database. Anything else is rejected
 # before execution, whatever the connection's own permissions would have done.
 _ALLOWED_ROOTS = (exp.Select, exp.Union, exp.Except, exp.Intersect, exp.Subquery)
+
+# DuckDB table functions that touch the filesystem or the network. A read-only
+# connection stops WRITES, and stops nothing else: `SELECT * FROM
+# read_csv_auto('C:/Users/me/secrets.csv')` is a pure SELECT, passes every
+# structural check above, and returns the file. Verified doing exactly that
+# before this list existed.
+#
+# That matters more here than in ordinary code because the SQL is written by a
+# language model. A model that is confused, or steered by text in the schema it
+# was shown, can emit one of these without anything upstream noticing.
+#
+# sqlglot parses these as exp.Anonymous, while genuine SQL functions (SUM,
+# COALESCE, RANK) parse as typed nodes -- so matching on Anonymous names is
+# precise and does not touch legitimate queries.
+_FILESYSTEM_FUNCTIONS = frozenset({
+    # CSV / text / binary
+    "read_csv", "read_csv_auto", "csv_scan", "sniff_csv",
+    "read_text", "read_blob",
+    # Parquet
+    "read_parquet", "parquet_scan", "parquet_metadata", "parquet_schema",
+    "parquet_file_metadata", "parquet_kv_metadata",
+    # JSON
+    "read_json", "read_json_auto", "read_json_objects",
+    "read_ndjson", "read_ndjson_auto", "read_ndjson_objects",
+    # filesystem enumeration
+    "glob",
+    # external catalogs and lakehouse formats
+    "iceberg_scan", "delta_scan", "postgres_scan", "postgres_scan_pushdown",
+    "sqlite_scan", "mysql_scan", "arrow_scan", "shapefile_meta",
+    # extension loading reachable from a SELECT context
+    "load_extension", "install_extension",
+})
+
+
+def _function_name(node: exp.Func) -> str:
+    """The SQL-level name of a function node, whatever shape sqlglot gave it.
+
+    Order matters. Only Anonymous nodes carry the function name in `.name`; on
+    a typed node `.name` is the first ARGUMENT, so read_csv('x.csv') reported
+    itself as "x.csv" and slipped past the block. Typed nodes must be asked via
+    sql_name().
+    """
+    if isinstance(node, exp.Anonymous):
+        return (node.name or "").strip().lower()
+    try:
+        return node.sql_name().strip().lower()
+    except Exception:
+        # Last resort: ReadCSV -> read_csv, ReadParquet -> read_parquet.
+        cls = type(node).__name__
+        return re.sub(r"(?<!^)(?=[A-Z])", "_", cls).lower()
 
 
 class ExecStatus(str, Enum):
@@ -104,6 +155,18 @@ def assert_read_only(sql: str, dialect: str = "duckdb") -> None:
         ):
             raise StatementRejected(
                 f"statement contains a {type(node).__name__.upper()} node"
+            )
+        # Reads that leave the database. See _FILESYSTEM_FUNCTIONS.
+        #
+        # Both node shapes must be checked. sqlglot gives some of these a
+        # dedicated class (read_parquet -> exp.ReadParquet) and leaves others
+        # anonymous (read_csv_auto -> exp.Anonymous). An earlier version of
+        # this check looked only at Anonymous and let read_parquet straight
+        # through.
+        if isinstance(node, exp.Func) and _function_name(node) in _FILESYSTEM_FUNCTIONS:
+            raise StatementRejected(
+                f"function {_function_name(node)}() reads outside the database "
+                "and is not allowed"
             )
 
 
@@ -208,10 +271,19 @@ class Database:
         return [row[0] for row in result.rows]
 
     def describe_table(self, table: str) -> list[tuple[str, str]]:
-        """Return (column_name, data_type) pairs for one table."""
+        """Return (column_name, data_type) pairs for one table.
+
+        The table name is escaped rather than interpolated raw. It normally
+        arrives from list_tables(), so it is trusted in practice -- but this
+        method is public on a class whose whole job is to make SQL safe, and
+        passing it `x' OR '1'='1` previously returned every column in the
+        database. A guarantee that only holds for well-behaved callers is not
+        a guarantee.
+        """
+        literal = "'" + str(table).replace("'", "''") + "'"
         result = self.execute(
             "SELECT column_name, data_type FROM information_schema.columns "
-            f"WHERE table_schema = 'main' AND table_name = '{table}' "
+            f"WHERE table_schema = 'main' AND table_name = {literal} "
             "ORDER BY ordinal_position"
         )
         return [(row[0], row[1]) for row in result.rows]

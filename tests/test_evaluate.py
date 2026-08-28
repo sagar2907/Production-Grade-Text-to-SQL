@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from rosetta.db import Database                        # noqa: E402
 from rosetta.evaluate import Outcome, classify, run    # noqa: E402
+from rosetta.generate import extract_sql               # noqa: E402
 from rosetta.pipeline import AnswerKind, Pipeline      # noqa: E402
 
 DB_PATH = ROOT / "data" / "rosetta.duckdb"
@@ -225,6 +226,31 @@ def test_the_unit_trap_really_is_100x():
     db.close()
     assert crore and lakh
     assert abs(lakh / crore - 100) < 1e-6
+
+
+# --- regression: extract_sql --------------------------------------------
+
+def test_prose_with_no_sql_yields_empty_string():
+    # Returning the prose verbatim sent "Sorry, I cannot help" to the database
+    # as a query. Empty string is what the repair loop knows how to handle.
+    assert extract_sql("no sql here at all") == ""
+    assert extract_sql("Sorry, I cannot help with that.") == ""
+
+
+def test_english_with_does_not_start_a_statement():
+    # A bare word-boundary match fired on the ordinary English "with",
+    # truncating "cannot help with that" to "with that." and passing that
+    # on as though it were SQL. The keyword now has to begin a line.
+    assert extract_sql("I will start with the table\nSELECT 1") == "SELECT 1"
+
+
+def test_real_sql_still_extracted():
+    assert extract_sql("```sql\nSELECT 1\n```") == "SELECT 1"
+    assert extract_sql("Here you go:\nSELECT 1;\nHope that helps") == "SELECT 1"
+    assert extract_sql("WITH c AS (SELECT 1) SELECT * FROM c") == (
+        "WITH c AS (SELECT 1) SELECT * FROM c"
+    )
+    assert extract_sql("  SELECT 1") == "SELECT 1"
 
 
 if __name__ == "__main__":

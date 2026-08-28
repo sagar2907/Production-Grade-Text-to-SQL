@@ -40,7 +40,6 @@ from typing import Any
 import yaml
 
 from .compare import Match, compare_result_sets, gold_requires_order
-from .correct import repair_stats
 from .db import Database
 from .pipeline import Answer, AnswerKind, Pipeline
 

@@ -33,7 +33,7 @@ import duckdb
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from reference import load_reference, re_to_be_ratio, spending_entities  # noqa: E402
+from reference import re_to_be_ratio, spending_entities  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = ROOT / "data" / "rosetta.duckdb"

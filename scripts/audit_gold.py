@@ -147,7 +147,7 @@ AUDITS: list[Audit] = [
         lambda rows_unused: True,  # printed for manual eyeballing, see describe
         "hand-checkable against the STATES table in load_data.py (DL, PY, "
         "JKU, LA are the only UTs defined there)",
-        lambda row: f"UT set from DB: (see full result printed above)"),
+        lambda row: "UT set from DB: printed above for hand-checking"),
 
     CrossQuery("Q08",
         "SELECT SUM(a.actual_amount_crore) FROM budget_allocations a "

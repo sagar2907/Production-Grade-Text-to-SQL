@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from rosetta.db import Database                                   # noqa: E402
-from rosetta.evaluate import Outcome, load_questions, run          # noqa: E402
+from rosetta.evaluate import load_questions, run                   # noqa: E402
 from rosetta.generate import OllamaProvider, available_models      # noqa: E402
 from rosetta.pipeline import Pipeline                              # noqa: E402
 

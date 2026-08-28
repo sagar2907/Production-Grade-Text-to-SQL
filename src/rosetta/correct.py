@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .db import Database, ExecResult, ExecStatus
+from .db import Database, ExecResult
 from .generate import Provider, ProviderError, generate_sql
 
 MAX_ATTEMPTS = 3

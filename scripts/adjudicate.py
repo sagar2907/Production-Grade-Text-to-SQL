@@ -179,6 +179,43 @@ def main() -> int:
 
     questions = {q["id"]: q for q in yaml.safe_load(
         QUESTIONS.read_text(encoding="utf-8"))["questions"]}
+
+    # Both passes below run off hardcoded lists, which is fine for readability
+    # and fatal if the question set moves underneath them. Previously this file
+    # loaded questions.yaml and never looked at it, so renaming or adding a
+    # question would leave the script cheerfully reporting "12/12 verified"
+    # against a stale list. Reconcile first and refuse to run on drift.
+    yaml_unanswerable = {q["id"] for q in questions.values()
+                         if q["category"] == "unanswerable"}
+    yaml_ambiguous = {q["id"] for q in questions.values()
+                      if q["category"] == "ambiguous"}
+    checked_unanswerable = {qid for qid, _, _ in UNANSWERABLE_CHECKS}
+    checked_ambiguous = {qid for qid, _, _ in AMBIGUOUS_READINGS}
+
+    drift = []
+    if yaml_unanswerable != checked_unanswerable:
+        drift.append(
+            f"unanswerable: yaml has {sorted(yaml_unanswerable - checked_unanswerable)} "
+            f"unchecked, script checks {sorted(checked_unanswerable - yaml_unanswerable)} "
+            f"that yaml no longer has"
+        )
+    if yaml_ambiguous != checked_ambiguous:
+        drift.append(
+            f"ambiguous: yaml has {sorted(yaml_ambiguous - checked_ambiguous)} "
+            f"unchecked, script checks {sorted(checked_ambiguous - yaml_ambiguous)} "
+            f"that yaml no longer has"
+        )
+    if drift:
+        print("ADJUDICATION IS OUT OF DATE with eval/questions.yaml:\n")
+        for line in drift:
+            print(f"  {line}")
+        print("\nFix the lists in this file before trusting any verdict below.")
+        return 1
+
+    print(f"reconciled against eval/questions.yaml: "
+          f"{len(checked_unanswerable)} unanswerable, "
+          f"{len(checked_ambiguous)} ambiguous, no drift\n")
+
     db = Database(DB)
 
     # --- Pass 1 -----------------------------------------------------------
