@@ -248,11 +248,11 @@ questions, temperature 0. `python scripts/measure_variance.py --repeats 3`
 
 | | baseline | semantic |
 |---|---|---|
-| confidently wrong | 76.7% every run, **0.0 pts spread** | 17.2% mean, 16.7–18.3%, **1.7 pts** |
-| execution accuracy | 34.4% every run, 0.0 pts spread | 52.1% mean, 50.0–53.1%, 3.1 pts |
-| questions with an unstable outcome | **0 of 60** | **1 of 60** |
+| confidently wrong | 76.1% mean, 73.3%–78.3%, **5.0 pts** | 16.7% every run, **0.0 pts spread** |
+| execution accuracy | 32.3% mean, 31.2%–34.4%, 3.1 pts | 53.1% every run, 0.0 pts |
+| questions with an unstable outcome | **3 of 60** | **0 of 60** |
 
-**Effect 59.4 pts against noise 1.7 pts — a ratio of 35.7×.** The headline is
+**Effect 59.4 pts against noise 5.0 pts — a ratio of 11.9×.** The headline is
 not a lucky run.
 
 Two things worth stating precisely, because they cut in opposite directions:
@@ -260,8 +260,8 @@ Two things worth stating precisely, because they cut in opposite directions:
 - *Within* one Python process running repeats back to back, the baseline arm is
   bit-stable — three identical results, no question changing outcome.
 - *Across* separate invocations the model is reloaded, and each arm moves by
-  about one question. Baseline has been observed at both 75.0% and 76.7%;
-  semantic at 16.7% and 18.3%.
+  about one question. Across three runs the baseline spanned
+  73.3%–78.3% while the semantic arm did not move at all.
 
 So: **reproducible to about ±1 question per arm**, and any claimed improvement
 smaller than that is not distinguishable from a reload.
