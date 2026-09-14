@@ -140,7 +140,7 @@ Two things the real file taught the schema, which I would not have invented:
 | `ambiguous` | 16 | **refuse** — more than one certified reading |
 | `unanswerable` | 12 | **refuse** — no reading has data |
 
-> ⚠️ **The gold set was drafted by Claude and needs human review.** Every gold query executes, which is a much weaker claim than every gold query being *right*. A wrong gold query does not error — it silently makes the headline number wrong. `scripts/verify_gold.py` checks that all 32 gold queries run, flags suspicious result shapes, and cross-checks that the refusal rules and the gold set agree on all 60 questions. It cannot check whether a judgement call was the right one.
+> ⚠️ **The gold set was drafted in a single pass and needs independent human review.** Every gold query executes, which is a much weaker claim than every gold query being *right*. A wrong gold query does not error — it silently makes the headline number wrong. `scripts/verify_gold.py` checks that all 32 gold queries run, flags suspicious result shapes, and cross-checks that the refusal rules and the gold set agree on all 60 questions. It cannot check whether a judgement call was the right one.
 
 ## Outcome taxonomy
 
