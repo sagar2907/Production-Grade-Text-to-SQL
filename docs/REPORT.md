@@ -10,9 +10,183 @@ Commit `{{COMMIT}}` · {{DATE}} · every figure measured and reproducible from t
 
 ## How to read this
 
+**Part 0 assumes you know nothing at all** — not what a database is, not what SQL looks like, not what a language model does. Everything the rest of the report leans on is explained there first, with worked examples. If you already write SQL and have used a language model, skip it.
+
 Parts I and II are background: what the problem is and what the data means. Nothing project-specific until Part III. If you already know what text-to-SQL is, start at Part III.
 
+§15b is a single real question traced through the whole system, with the actual output. If you prefer to see a thing work before reading how it is built, start there.
+
 Part VI is the section worth reading twice. It records the design decisions that turned out to be **wrong**, and what replaced them. In a project whose subject is confidently wrong numbers, the mistakes are the most informative part of the record.
+
+---
+
+# Part 0 — Starting from zero
+
+*Nothing in this part is specific to this project. It explains the ideas the rest of the report leans on, assuming you have never written a line of SQL and have never used a language model. If those are familiar, skip to Part I.*
+
+## 0.1 What a database actually is
+
+A **database** is a program whose one job is to store facts and hand them back on request. The facts live in **tables**, which look like spreadsheets:
+
+```
+budget_allocations
+
+fiscal_year | ministry              | be_amount_crore | actual_amount_crore
+------------+-----------------------+-----------------+--------------------
+2019-20     | Ministry of Railways  |          70,250 |              65,837
+2019-20     | Ministry of Defence   |         305,296 |             316,296
+2020-21     | Ministry of Railways  |          70,000 |              57,891
+```
+
+Three words carry all the weight:
+
+- A **row** is one fact. "In 2019-20, Railways was allocated 70,250 crore."
+- A **column** is one attribute that every row has. `fiscal_year` is a column.
+- The **schema** is the catalogue: which tables exist, which columns each has, and what type each column holds (a number, a date, text).
+
+The schema is the part that matters here. This project's database has **11 tables and 182 columns**, which is small by real-world standards and still far too much for anyone to hold in their head. A real corporate warehouse has hundreds of tables and thousands of columns, and that gap between "what exists" and "what one person can remember" is the entire problem this project is about.
+
+## 0.2 Reading SQL without knowing SQL
+
+**SQL** is the language you use to ask a database for something. You do not need to write it to follow this report; you need to read it. It is more regular than it looks, because every query is built from the same handful of clauses:
+
+| Clause | Plain English |
+|---|---|
+| `SELECT` | which columns I want back |
+| `FROM` | which table to take them from |
+| `WHERE` | keep only rows matching this condition |
+| `GROUP BY` | collapse rows into groups, one output row per group |
+| `SUM(x)` / `COUNT(*)` | add up a column / count rows |
+| `JOIN` | glue two tables together on a shared value |
+| `ORDER BY` | sort the output |
+
+So this query:
+
+```sql
+SELECT ministry, SUM(be_amount_crore)
+FROM budget_allocations
+WHERE fiscal_year = '2019-20'
+GROUP BY ministry
+```
+
+reads as: *take the budget table, throw away every row that is not 2019-20, put the surviving rows into piles by ministry, and add up the crore column within each pile.* One row comes back per ministry.
+
+That is genuinely most of it. SQL's difficulty is not its grammar.
+
+## 0.3 The difficulty is knowing what the columns mean
+
+Look again at the table in §0.1. It has `be_amount_crore` and `actual_amount_crore`. Both are money. Both are for the same ministry and the same year. They are different numbers.
+
+Nothing in the schema tells you which one a person means when they say "the budget for Railways in 2019-20". The database will happily add up either. It will never warn you that you picked the one nobody meant.
+
+> **This is the whole problem in one sentence:** a database answers the question you typed, not the question you meant, and it cannot tell the difference.
+
+A person who has worked with this data for a year knows which column to reach for. That knowledge is real, valuable, and written down nowhere. Making it explicit is what a **semantic layer** is (§13), and measuring what it is worth is what this project does.
+
+## 0.4 NULL: the value that means "we don't know"
+
+Databases need a way to say "there is no value here". That marker is **NULL**, and it is not zero. Zero is a measurement. NULL is the absence of one.
+
+This distinction causes real bugs, because NULL infects every comparison it touches. In ordinary logic a statement is true or false. SQL has **three** outcomes — true, false, and NULL — and a comparison against NULL returns NULL:
+
+```sql
+NULL < 2016      -- not TRUE, not FALSE. NULL.
+NOT (NULL < 2016) -- still NULL, which SQL treats as "do not keep this row"
+```
+
+The second line is the trap. It looks like it means "keep everything that is 2016 or later, including rows with no date". It does not. It silently discards every NULL row. §36 of this report is a real instance of exactly that bug, in a script written to catch bugs.
+
+## 0.5 Joins, grain, and how a sum can silently triple
+
+A **join** glues two tables together where they share a value. If one table has a row per ministry per year, and another has a row per ministry per month, joining them matches each annual row against *twelve* monthly rows.
+
+The **grain** of a table is what one row represents. One year? One month? One scheme in one state in one month? Joining tables of different grain duplicates the coarser side:
+
+```
+before the join                  after joining to 12 monthly rows
+Railways | 70,250                Railways | 70,250 | January
+                                 Railways | 70,250 | February
+                                 Railways | 70,250 | March        ... and so on
+```
+
+The annual figure now appears twelve times. `SUM(be_amount_crore)` no longer returns 70,250. It returns 843,000. This is called **fan-out**, and it is dangerous precisely because nothing fails — the query runs, returns one tidy number, and that number is wrong by a factor nobody can guess from looking at it. On this project's data, the measured inflation from one such join is **33×**.
+
+*(The twelve-row illustration above is a simplified sketch; 33× is the real measured figure from this repository's data.)*
+
+## 0.6 What a language model is
+
+A **large language model** (LLM) is a program that predicts text. Shown some text, it produces what most plausibly comes next, one fragment at a time. It learned to do this from an enormous amount of writing, which is why it can produce fluent SQL: it has seen a great deal of SQL.
+
+Two consequences matter here, and they are the reason this project exists.
+
+**It is not looking anything up.** When it writes `SELECT SUM(expenditure_crore)`, it has not consulted your database. It has produced the column name that *seems most likely* given everything it was shown. If your real column is `be_amount_crore`, the model has no way to know it guessed wrong.
+
+**Plausible and true are indistinguishable in the output.** A correct answer and a fabricated one arrive in the same confident tone, with no hedging and no error. This is usually called **hallucination**. The engineering response is not to hope for a better model — it is to build a system where a fabricated answer cannot quietly become the final answer.
+
+## 0.7 Prompts, temperature, and why "the same question" can give different answers
+
+The text you hand the model is the **prompt**. In this project the prompt is assembled from three things: a description of the database schema, the semantic layer (when it is switched on), and the user's question.
+
+**Temperature** controls how adventurous the model's choice of next fragment is. At temperature 0 it always takes the single most likely option, which is as close to repeatable as a model gets — and it is what every measurement in this report uses.
+
+"As close as it gets" is not "exactly". The same model at temperature 0 can still produce different output across server restarts, because floating-point arithmetic on a GPU is not guaranteed to combine in the same order every time. That is not a footnote: it is precisely why Part VII measures the **spread** across three runs rather than quoting a single number (§41).
+
+## 0.8 Running the model on your own machine
+
+There are two ways to use a language model: send your text to somebody's server over the internet (an **API**), or run the model on your own hardware (**local inference**). This project runs locally, through a tool called **Ollama**, using a model called **qwen2.5-coder:7b**.
+
+Decoding that name: it is a model specialised for writing code, with **7 billion parameters** — the internal numbers it learned during training. Bigger models are generally better and need more memory. 7B is small enough to run on an ordinary computer.
+
+The trade is deliberate. A local model writes worse SQL than a large hosted one, but it has no per-request cost, no rate limit, and no key to manage — which matters when the evaluation makes several hundred model calls and is run many times over. And since the project measures the *difference* between two setups rather than absolute quality, a weaker model does not invalidate the finding (§25).
+
+## 0.9 Benchmarks, and what a single accuracy number hides
+
+A **benchmark** is a fixed set of questions with known-correct answers, used to compare systems fairly. **Spider** and **BEAVER**, named in §3 and §11, are the well-known benchmarks for text-to-SQL.
+
+The usual score is **execution accuracy**: of all the questions, what share produced a query returning the right rows? It is one number, easy to compare, and it hides the thing that matters most. Consider two failures:
+
+```
+the query crashed              the user sees an error and asks again
+the query returned 8,412       the user puts 8,412 into a board report
+```
+
+Execution accuracy counts these identically — both are simply "not correct". But a crash is **visible** and costs a retry, while a clean wrong number is **invisible** and propagates. Nobody re-checks a figure that arrived without an error attached.
+
+Splitting those apart is why this report uses six outcome labels instead of one score (§24), and why its headline is the **confidently-wrong rate** rather than accuracy.
+
+## 0.10 Deterministic, probabilistic, and why it matters here
+
+Something is **deterministic** when the same input always produces the same output. A hand-written rule is deterministic. A language model is **probabilistic** — it samples from likelihoods, so it may answer differently on Tuesday.
+
+This distinction drives the central design decision of the project. The part that writes SQL is probabilistic, because writing SQL from English genuinely needs that flexibility. The part that decides *whether a question can be honestly answered at all* is deterministic — hand-written rules, no model (§21). The reasoning is short: the decision not to answer should not be delegated to the thing you are guarding against.
+
+The database itself is also built deterministically, from a fixed starting number called a **seed**, so that anyone who clones the repository and runs one command gets byte-identical data.
+
+## 0.11 YAML, in thirty seconds
+
+Three files in this project hold the domain knowledge, written in **YAML** — a plain-text format for structured data, designed to be edited by humans rather than generated by programs. Indentation indicates nesting:
+
+```yaml
+be_amount_crore:
+  unit: crore
+  means: Budget Estimate, as presented in February
+  invites: being read as "what was actually spent"
+```
+
+That is a name, and three labelled facts about it. Nothing more. It is used here rather than code because these files are meant to be argued over and reviewed by people who are not programmers.
+
+## 0.12 How to read the experiment
+
+Part VII reports a measurement, and it uses four words in a specific way.
+
+| Word | Meaning |
+|---|---|
+| **Arm** | One configuration being compared. Here there are two: with the semantic layer, and without it. |
+| **Baseline** | The arm you are trying to beat — here, no semantic layer. |
+| **Ablation** | An experiment that changes exactly one thing and holds everything else identical, so any difference can only be caused by that one thing. |
+| **Spread** | The gap between the highest and lowest result across repeated runs. It tells you how much of a difference is real and how much is noise. |
+
+The last one is the one people skip. If a change improves a score by 3 points but the score wanders by 5 points on its own between runs, the change has not been shown to do anything. A result quoted without its spread is not yet a claim. That is why every headline in Part VII is a mean of three runs with its range printed next to it.
 
 ---
 
@@ -187,6 +361,89 @@ db.Database               read-only, parse-verified, wall-clock timeout
    v
 answer + the SQL, always shown
 ```
+
+## 15b. One question, end to end
+
+The diagram above is abstract. Here is a real question travelling through the system, with the actual output both ways. This is the output of `scripts/demo.py`, reproduced in `docs/demo-output.txt`, not an illustration written for this report.
+
+The question is deliberately ordinary — the kind anyone would type:
+
+> **How much did the government spend in 2019-20?**
+
+### Step 1 — Refusal rules run first, before any model call
+
+`ambiguity.assess()` takes the raw text and checks it against hand-written rules. It never sees the database and never calls the model, so it is instant and gives the same verdict every time.
+
+One rule fires, named `estimate_basis`: the question does not say **which of the three figures** it means. Budget Estimate, Revised Estimate and Actuals are three different numbers for 2019-20, routinely 10–20% apart (§5).
+
+The verdict is `AMBIGUOUS`, and the pipeline stops there. No prompt is built and no SQL is generated — the refusal costs nothing because it happens before the expensive part.
+
+### Step 2 — What each arm does with that verdict
+
+**Without the semantic layer**, there are no rules to fire. The question goes straight to the model, which writes:
+
+```sql
+SELECT SUM(expenditure_crore) AS total_expenditure
+FROM expenditure_actuals
+WHERE fiscal_year = '2019-20'
+```
+
+That query is valid SQL. It runs without error. It returns:
+
+```
+666,197
+```
+
+No caveat, no question asked. The user has no way of knowing which of the three bases this is, or whether it includes Interest Payments.
+
+**With the semantic layer**, the same question produces no SQL at all:
+
+```
+That question has more than one defensible answer here.
+
+  Which figure do you mean?
+    - Budget Estimate - what was proposed when the budget was presented
+    - Revised Estimate - the mid-year correction
+    - Actuals - what was really spent (available to 2021-22 only)
+    (these are three different numbers, routinely 10-20% apart)
+```
+
+### Step 3 — Why the refusal was the right answer
+
+The four certified readings of that one question return:
+
+| Reading | Figure |
+|---|---|
+| Budget Estimate, all spending | 2,905,387 |
+| Budget Estimate, ministries and departments only | 1,636,754 |
+| Revised Estimate, all spending | 2,872,216 |
+| Actuals, all spending | 2,643,743 |
+
+Four defensible answers, spanning a **1.8× range**. Any system that picks one silently is right at most a quarter of the time, and gives no signal when it is wrong.
+
+Notice that these four differ along *two* axes, not one: which estimate basis, and whether "the government" means all spending or only ministries and departments (§9, a 5.2× difference on this data). The rules caught the first and asked about it. The second is visible in the certified readings but was not itself raised as a question — an honest limit of keyword-based rules, and the kind of gap Part IX is careful not to paper over.
+
+Now look back at what the baseline returned: **666,197**. That is not any of the four. Its closest certified reading is 1,636,754, which it misses by **59%**.
+
+> It did not pick the wrong reading from the menu. It produced a **fifth number**, and presented it exactly as it would have presented a correct one.
+
+This is the failure the project is named after and built to measure. Nothing crashed. Nothing was flagged. A plausible figure with the right number of digits landed in front of the user, and the only way to discover it is wrong is to already know the answer.
+
+### Step 4 — What happens when the question *is* answerable
+
+Pin down the ambiguity and the picture changes completely:
+
+> **What was the Budget Estimate for the Ministry of Railways in 2019-20?**
+
+Now the rules pass it — one basis, one named entity, one year — and the rest of the pipeline runs:
+
+1. **`generate.generate_sql()`** builds a prompt from the schema text, the semantic layer, and the question, and asks the model for SQL.
+2. **`correct.resolve()`** runs `EXPLAIN` on the result first. `EXPLAIN` asks the database to *plan* the query without running it, which catches misspelled columns and bad joins cheaply. On a 182-column schema, most first attempts fail here on a column name.
+3. If `EXPLAIN` fails, the error text is fed back to the model and it tries again — **three attempts maximum**, then the pipeline gives up and reports an error rather than guessing.
+4. The surviving query executes inside `db.Database`, which is read-only, parse-verified as SELECT-only, and killed if it exceeds a wall-clock ceiling.
+5. The answer is returned **together with the SQL that produced it**, always, so the reader can check the reasoning rather than trusting the number.
+
+Step 5 is not decoration. A number you cannot audit is exactly the thing this project argues against.
 
 ## 16. The library
 
@@ -554,22 +811,45 @@ python scripts/ask.py "What was the Budget Estimate for the Ministry of Railways
 |---|---|
 | **Ablation** | An experiment that removes one component and holds everything else fixed, so any change is attributable to that component |
 | **Abstention** | A system declining to predict rather than guessing, trading coverage for accuracy |
+| **API** | A way for one program to ask another for something over a network. Using a model by API means sending your text to someone else's server |
+| **Arm** | One configuration in a comparison. This project has two: with the semantic layer and without |
+| **Baseline** | The arm you are measuring against — here, the system with no semantic layer |
 | **BE / RE / Actuals** | Budget Estimate, Revised Estimate, Actuals — three different figures for the same year |
+| **Benchmark** | A fixed set of questions with known-correct answers, used to compare systems fairly. Spider and BEAVER are the well-known ones for text-to-SQL |
+| **Column** | One attribute that every row in a table has, such as `fiscal_year` |
 | **Confidently wrong** | A query that runs cleanly and returns a plausible but incorrect number. The failure this project measures |
 | **Crore / lakh** | Indian units: 1 crore = 10,000,000; 1 lakh = 100,000; 1 crore = 100 lakh |
 | **CTE** | Common Table Expression — a named intermediate result inside a query, written `WITH x AS (...)` |
+| **Deterministic** | Same input, same output, every time. Hand-written rules are deterministic; language models are not |
 | **EXPLAIN** | A SQL command that plans a query without running it; used here as a cheap validity gate |
 | **Execution accuracy** | Share of questions where the generated query returned the right rows. The conventional single metric |
 | **Fan-out** | A join that multiplies rows because the tables are at different grains, inflating any sum |
 | **Gold query** | A hand-written correct SQL query for an evaluation question, used as the reference answer |
 | **Grain** | What one row of a table represents — here, one year versus one month |
+| **Hallucination** | A model stating something fabricated in the same confident tone it uses for correct answers |
+| **Join** | Combining two tables by matching a shared value. Joining tables of different grain causes fan-out |
+| **Large language model (LLM)** | A program that predicts likely text. It generates plausible continuations; it does not look facts up |
+| **Local inference** | Running a model on your own hardware instead of calling a hosted API. No key, no rate limit, no per-call cost |
 | **Multiset** | A collection that counts duplicates; used for row comparison so a lost `GROUP BY` cannot pass |
+| **NULL** | SQL's marker for "no value recorded". Not zero, and it poisons comparisons — see three-valued logic |
+| **Ollama** | The tool used here to run a language model locally |
+| **Parameters (as in 7B)** | The internal numbers a model learned in training. 7B means 7 billion — small enough to run on an ordinary machine |
+| **Probabilistic** | Producing output by sampling from likelihoods, so repeated runs can differ. The opposite of deterministic |
+| **Prompt** | The text handed to the model. Here: schema description + semantic layer (when on) + the user's question |
 | **Quantisation** | Compressing a model's weights to fewer bits so it fits in less memory, at some cost to quality |
+| **Row** | One fact in a table — one ministry's allocation in one year |
+| **Schema** | The catalogue of a database: which tables exist, which columns each has, and of what type |
+| **Seed** | The fixed starting number that makes generated data reproducible; the same seed rebuilds byte-identical data |
 | **Selective prediction** | Allowing a model to decline low-confidence cases; the ML framing of this project's refusal behaviour |
 | **Semantic layer** | A written, versioned description of what data means: column glossary, certified metrics, validated join paths |
+| **Spread** | The gap between the highest and lowest result across repeated runs — the noise floor a real effect must clear |
+| **SQL** | The language used to ask a database for data |
+| **Table** | A grid of rows and columns holding one kind of fact |
+| **Temperature** | How adventurous the model's word choice is. 0 means always take the most likely option; every measurement here uses 0 |
 | **Text-to-SQL** | Turning a natural-language question into a database query automatically |
 | **Three-valued logic** | SQL's TRUE / FALSE / NULL. `NULL < 2016` is NULL, not FALSE — the cause of a real bug in §36 |
+| **YAML** | A plain-text format for structured data, indentation-nested, meant to be written and reviewed by people |
 
 ---
 
-*Compiled from the repository at commit `7175bc1`. All measurements produced by `scripts/run_eval.py` and `scripts/measure_variance.py`, stored in `results/`. Where a figure is a mean, its range is given alongside. Rendered to PDF by `scripts/build_report.py`.*
+*Compiled from the repository at commit `{{COMMIT}}`. All measurements produced by `scripts/run_eval.py` and `scripts/measure_variance.py`, stored in `results/`. Where a figure is a mean, its range is given alongside. Rendered to PDF by `scripts/build_report.py`.*
