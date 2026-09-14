@@ -18,6 +18,7 @@ whose extracted text does not match their ink coverage all get flagged.
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import shutil
 import subprocess
 import sys
@@ -26,7 +27,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "docs" / "REPORT.md"
 BUILD = ROOT / "docs" / "_build"
-DEFAULT_OUT = Path("C:/Users/sagar/Desktop/SKILLS/Rosetta_Project_Report.pdf")
+# Inside the repo, so the folder always carries its own report. An absolute
+# path lived here once; it wrote the PDF to a machine-specific directory and
+# left a clone with no report at all.
+DEFAULT_OUT = ROOT / "docs" / "Rosetta_Project_Report.pdf"
 
 BROWSERS = [
     Path("C:/Program Files/Google/Chrome/Application/chrome.exe"),
@@ -98,13 +102,68 @@ def find_browser() -> Path:
     )
 
 
+def git(*args: str) -> str:
+    """Read something out of git, or return "" if this is not a checkout."""
+    try:
+        done = subprocess.run(
+            ["git", *args], cwd=ROOT, capture_output=True, text=True, timeout=15
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return done.stdout.strip() if done.returncode == 0 else ""
+
+
+def stamp_revision(text: str) -> str:
+    """Fill in the commit and date placeholders at build time.
+
+    The header used to carry a hardcoded short hash. History was later
+    rewritten, the hash stopped resolving, and the report confidently cited a
+    commit that did not exist -- the same drift the report's own Shape C is
+    about. Deriving it here means it cannot go stale.
+    """
+    commit = git("rev-parse", "--short", "HEAD") or "working tree"
+    date = git("log", "-1", "--format=%ad", "--date=format:%d %B %Y")
+    if not date:
+        date = _dt.date.today().strftime("%d %B %Y")
+    if git("status", "--porcelain"):
+        commit += " + uncommitted changes"
+    return text.replace("{{COMMIT}}", commit).replace("{{DATE}}", date)
+
+
+def stamp_footer(pdf: Path) -> None:
+    """Draw a page number into the bottom margin of every page.
+
+    Chrome's --print-to-pdf has no custom-footer option, so this is done
+    afterwards. The @page rule leaves 16mm at the foot to write into.
+    """
+    try:
+        import pymupdf
+    except ImportError:
+        return
+    doc = pymupdf.open(pdf)
+    grey = (0.54, 0.56, 0.63)
+    for number, page in enumerate(doc, start=1):
+        label = str(number)
+        page.insert_text(
+            (page.rect.width - 42 - pymupdf.get_text_length(label, "helv", 7.5),
+             page.rect.height - 26),
+            label, fontname="helv", fontsize=7.5, color=grey,
+        )
+        page.insert_text(
+            (42, page.rect.height - 26),
+            "Rosetta · project report", fontname="helv", fontsize=7.5, color=grey,
+        )
+    doc.saveIncr()
+    doc.close()
+
+
 def render_html() -> Path:
     try:
         import markdown
     except ImportError:
         raise SystemExit("pip install markdown")
 
-    text = SOURCE.read_text(encoding="utf-8")
+    text = stamp_revision(SOURCE.read_text(encoding="utf-8"))
     body = markdown.markdown(
         text,
         extensions=["tables", "fenced_code", "sane_lists", "attr_list"],
@@ -219,6 +278,7 @@ def main() -> int:
     if not out.exists() or out.stat().st_size == 0:
         print(f"FAILED: {out} missing or empty")
         return 1
+    stamp_footer(out)
     print(f"pdf:    {out}  ({out.stat().st_size:,} bytes)\n")
 
     print("visual verification")

@@ -4,7 +4,7 @@
 
 Project report, written from first principles. No prior knowledge of text-to-SQL or Indian public finance is assumed.
 
-Commit `7175bc1` · 28 August 2026 · every figure measured and reproducible from this repository.
+Commit `{{COMMIT}}` · {{DATE}} · every figure measured and reproducible from this repository.
 
 ---
 
